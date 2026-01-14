@@ -31,6 +31,10 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
+pubspec.lock
+
+# IDE specific
+.claude/
 
 # Symbolication related
 app.*.symbols
