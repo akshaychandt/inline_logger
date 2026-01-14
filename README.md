@@ -341,6 +341,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 Created with ❤️ for the Flutter community.
 
+Special thanks to [aswinbbc](https://github.com/aswinbbc) for contributing ideas to this project.
+
 ## 📞 Support
 
 - 🐛 [Report bugs](https://github.com/akshaychandt/inline_logger/issues)
