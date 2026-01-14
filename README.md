@@ -5,6 +5,8 @@
 [![pub package](https://img.shields.io/pub/v/inline_logger.svg)](https://pub.dev/packages/inline_logger)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+Maintained by Akshay Chand T ([akshaychandt](https://github.com/akshaychandt))
+
 ## ✨ Why inline_logger?
 
 Traditional logging requires you to break your code flow, add print statements, and often rebuild your UI. With `inline_logger`, you can **log any value inline** - directly in your widget tree, method chains, or anywhere else - without disrupting your code!
