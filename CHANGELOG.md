@@ -1,3 +1,8 @@
+## 0.1.0+1
+
+* Updated README with maintainer information
+* Added credits for contributors
+
 ## 0.1.0
 
 * Initial release
