@@ -1,21 +1,34 @@
 import 'dart:developer' as dev;
 import 'package:flutter/foundation.dart';
 
+/// ANSI color codes for terminal output
+class _AnsiColors {
+  static const String reset = '\x1B[0m';
+  static const String gray = '\x1B[90m';
+  static const String cyan = '\x1B[36m';
+  static const String blue = '\x1B[34m';
+  static const String green = '\x1B[32m';
+  static const String yellow = '\x1B[33m';
+  static const String red = '\x1B[31m';
+  static const String brightRed = '\x1B[91m';
+}
+
 /// Log levels for categorizing log messages
 enum LogLevel {
-  debug(0, '🔍', 'DEBUG'),
-  verbose(1, '📝', 'VERBOSE'),
-  info(2, 'ℹ️', 'INFO'),
-  success(3, '✅', 'SUCCESS'),
-  warning(4, '⚠️', 'WARNING'),
-  error(5, '❌', 'ERROR'),
-  critical(6, '🚨', 'CRITICAL');
+  debug(0, '🔍', 'DEBUG', _AnsiColors.gray),
+  verbose(1, '📝', 'VERBOSE', _AnsiColors.cyan),
+  info(2, 'ℹ️', 'INFO', _AnsiColors.blue),
+  success(3, '✅', 'SUCCESS', _AnsiColors.green),
+  warning(4, '⚠️', 'WARNING', _AnsiColors.yellow),
+  error(5, '❌', 'ERROR', _AnsiColors.red),
+  critical(6, '🚨', 'CRITICAL', _AnsiColors.brightRed);
 
-  const LogLevel(this.priority, this.emoji, this.label);
+  const LogLevel(this.priority, this.emoji, this.label, this.color);
 
   final int priority;
   final String emoji;
   final String label;
+  final String color;
 }
 
 /// Global configuration for the logger
@@ -28,6 +41,9 @@ class LoggerConfig {
 
   /// Whether to show emojis in logs
   static bool showEmoji = true;
+
+  /// Whether to use ANSI colors in console output
+  static bool useColors = true;
 
   /// Whether to enable logging (can be toggled at runtime)
   static bool enabled = kDebugMode;
@@ -131,15 +147,21 @@ class Logger {
     final label = level.label;
     final key = name.isEmpty ? '' : '@$name';
 
-    final message = '$timestamp $emoji [$label] $key $value';
+    // Build message without colors first (for history)
+    final plainMessage = '$timestamp $emoji [$label] $key $value';
 
     if (saveToHistory) {
-      LoggerConfig._addToHistory(message);
+      LoggerConfig._addToHistory(plainMessage);
     }
+
+    // Apply colors if enabled
+    final coloredMessage = LoggerConfig.useColors
+        ? '${level.color}$plainMessage${_AnsiColors.reset}'
+        : plainMessage;
 
     if (kDebugMode) {
       dev.log(
-        message,
+        coloredMessage,
         name: 'InlineLogger',
         level: _getLogLevel(level),
         stackTrace: stackTrace,

@@ -6,6 +6,7 @@ void main() {
   LoggerConfig.showTimestamp = true;
   LoggerConfig.showEmoji = true;
   LoggerConfig.minLevel = LogLevel.debug;
+  LoggerConfig.useColors = true; // Enable colored console output
 
   Logger.info('App starting', 'main');
 

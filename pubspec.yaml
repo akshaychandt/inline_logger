@@ -1,6 +1,6 @@
 name: inline_logger
 description: A powerful inline logger for Flutter. Log anywhere in your widget tree without breakpoints. Chain logging calls directly on any expression.
-version: 0.1.0+1
+version: 0.1.0+2
 homepage: https://github.com/akshaychandt/inline_logger
 repository: https://github.com/akshaychandt/inline_logger
 issue_tracker: https://github.com/akshaychandt/inline_logger/issues

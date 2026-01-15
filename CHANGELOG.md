@@ -1,3 +1,10 @@
+## 0.1.0+2
+
+* Added color-coded console output with ANSI color codes
+* Different colors for each log level (gray, cyan, blue, green, yellow, red, bright red)
+* New `LoggerConfig.useColors` configuration option
+* Updated documentation with color feature information
+
 ## 0.1.0+1
 
 * Updated README with maintainer information

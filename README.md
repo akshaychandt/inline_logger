@@ -25,12 +25,13 @@ return Text(user.name.log('User name'));
 
 - 🔗 **Chainable inline logging** - Log any value without breaking code flow
 - 🎯 **Multiple log levels** - Debug, Verbose, Info, Success, Warning, Error, Critical
+- 🎨 **Color-coded output** - Different colors for each log level in console
 - 🎨 **Emoji indicators** - Visual log levels (can be disabled)
 - ⚡ **Zero performance impact** - Automatically disabled in release mode
 - 📊 **Log history** - Store important logs for crash reporting
 - 🔍 **Stack trace support** - Capture stack traces for errors
 - 🌳 **Widget tree logging** - Log anywhere in your build methods
-- ⚙️ **Highly configurable** - Customize timestamps, emojis, log levels
+- ⚙️ **Highly configurable** - Customize timestamps, emojis, colors, log levels
 
 ## 📦 Installation
 
@@ -104,17 +105,17 @@ Logger.critical('Critical failure!');
 
 ## 📚 Log Levels
 
-inline_logger supports 7 log levels:
+inline_logger supports 7 log levels with color-coded output:
 
-| Level | Emoji | Method | Use Case |
-|-------|-------|--------|----------|
-| Debug | 🔍 | `.logDebug()` | Debugging information |
-| Verbose | 📝 | `.logVerbose()` | Detailed logs |
-| Info | ℹ️ | `.logInfo()` | General information |
-| Success | ✅ | `.logSuccess()` | Successful operations |
-| Warning | ⚠️ | `.logWarning()` | Warnings |
-| Error | ❌ | `.logError()` | Errors |
-| Critical | 🚨 | `.logCritical()` | Critical failures |
+| Level | Color | Emoji | Method | Use Case |
+|-------|-------|-------|--------|----------|
+| Debug | Gray | 🔍 | `.logDebug()` | Debugging information |
+| Verbose | Cyan | 📝 | `.logVerbose()` | Detailed logs |
+| Info | Blue | ℹ️ | `.logInfo()` | General information |
+| Success | Green | ✅ | `.logSuccess()` | Successful operations |
+| Warning | Yellow | ⚠️ | `.logWarning()` | Warnings |
+| Error | Red | ❌ | `.logError()` | Errors |
+| Critical | Bright Red | 🚨 | `.logCritical()` | Critical failures |
 
 ## 🎨 Advanced Features
 
@@ -130,8 +131,29 @@ LoggerConfig.showTimestamp = false;
 // Disable emojis
 LoggerConfig.showEmoji = false;
 
+// Enable/disable color-coded output
+LoggerConfig.useColors = true; // Default is true
+
 // Disable logging completely
 LoggerConfig.enabled = false;
+```
+
+### Color-Coded Console Output
+
+inline_logger automatically adds ANSI color codes to your console output, making it easy to distinguish between different log levels at a glance:
+
+- **Debug** logs appear in gray
+- **Verbose** logs appear in cyan
+- **Info** logs appear in blue
+- **Success** logs appear in green
+- **Warning** logs appear in yellow
+- **Error** logs appear in red
+- **Critical** logs appear in bright red
+
+Colors work in most modern IDEs and terminals that support ANSI escape codes. You can disable colors if needed:
+
+```dart
+LoggerConfig.useColors = false;
 ```
 
 ### API Logging
@@ -291,6 +313,7 @@ void main() {
   LoggerConfig.minLevel = LogLevel.debug;
   LoggerConfig.showTimestamp = true;
   LoggerConfig.showEmoji = true;
+  LoggerConfig.useColors = true; // Enable color-coded output
   LoggerConfig.maxHistorySize = 100;
 
   runApp(MyApp());
