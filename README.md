@@ -25,12 +25,14 @@ return Text(user.name.log('User name'));
 
 - 🔗 **Chainable inline logging** - Log any value without breaking code flow
 - 🎯 **Multiple log levels** - Debug, Verbose, Info, Success, Warning, Error, Critical
+- 📍 **Clickable source locations** - IDE-clickable links to the exact call site
 - 🎨 **Color-coded output** - Different colors for each log level in console
 - 🎨 **Emoji indicators** - Visual log levels (can be disabled)
 - ⚡ **Zero performance impact** - Automatically disabled in release mode
 - 📊 **Log history** - Store important logs for crash reporting
 - 🔍 **Stack trace support** - Capture stack traces for errors
 - 🌳 **Widget tree logging** - Log anywhere in your build methods
+- 🔌 **Extensibility hooks** - Custom formatters and record sinks
 - ⚙️ **Highly configurable** - Customize timestamps, emojis, colors, log levels
 
 ## 📦 Installation
@@ -39,7 +41,7 @@ Add this to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  inline_logger: ^0.1.0
+  inline_logger: ^0.2.0
 ```
 
 Then run:
@@ -138,6 +140,67 @@ LoggerConfig.useColors = true; // Default is true
 LoggerConfig.enabled = false;
 ```
 
+### 📍 Clickable Source Locations
+
+Every log line automatically includes the **exact call site** (file path + line + column) appended at end-of-line in parentheses — the only format VS Code (Dart-Code) and Android Studio / IntelliJ recognise as clickable. Click the link in your IDE's Run/Debug console to jump directly to that line of source code.
+
+```
+[2024-01-01T12:34:56.789] ℹ️ [INFO] Counter updated → 5 (package:my_app/main.dart:42:5)
+```
+
+**No extra arguments needed** — source location is captured automatically via `StackTrace.current`, and the package intelligently skips its own internal frames to find your code.
+
+The trailing `(...)` segment is intentionally un-styled (no ANSI), at end-of-line, with a mandatory `:line:column`. Anything else breaks the IDE's stack-frame scanner.
+
+#### Link Formats
+
+```dart
+// Recommended default — package: URIs are clickable in both VS Code and
+// Android Studio. Falls back to fileUri for files outside lib/.
+LoggerConfig.clickableLinkFormat = LinkFormat.auto;
+
+// Explicit package URI (same fallback behaviour as `auto`).
+LoggerConfig.clickableLinkFormat = LinkFormat.packageUri;
+// Output: (package:my_app/main.dart:42:5)
+
+// Absolute file URI — clickable in both VS Code and Android Studio.
+LoggerConfig.clickableLinkFormat = LinkFormat.fileUri;
+// Output: (file:///Users/akshay/app/lib/main.dart:42:5)
+
+// Bare absolute path — kept for older IntelliJ plugin versions.
+LoggerConfig.clickableLinkFormat = LinkFormat.bareAbsolute;
+// Output: (/Users/akshay/app/lib/main.dart:42:5)
+
+// Deprecated: project-relative paths are NOT clickable in any IDE.
+// Silently falls back to packageUri/fileUri.
+// LoggerConfig.clickableLinkFormat = LinkFormat.projectRelative;
+```
+
+#### Source Location Configuration
+
+```dart
+// Master switch (default: true in debug, false in release)
+LoggerConfig.showSourceLocation = true;
+
+// Show/hide individual components
+LoggerConfig.showFilePath = true;
+LoggerConfig.showLineNumber = true;
+// The rendered string always includes `:column` (IDEs require it). This
+// flag controls only whether the column comes from the stack frame
+// (`true`) or is forced to `:1` (`false`).
+LoggerConfig.showColumnNumber = false;
+LoggerConfig.showMemberName = false;    // Off by default
+
+// Omit the location segment from the rendered string entirely.
+// The location is still attached to `LogRecord.source` for
+// `onRecord` / `logHistory` consumers.
+LoggerConfig.useClickableLinks = false;
+```
+
+#### Zero-Cost in Production
+
+Source location capture is **completely free in release builds**. `StackTrace.current` is never called unless both `LoggerConfig.enabled` and `LoggerConfig.showSourceLocation` are true, and the message passes the `minLevel` filter. Filter first, capture second.
+
 ### Color-Coded Console Output
 
 inline_logger automatically adds ANSI color codes to your console output, making it easy to distinguish between different log levels at a glance:
@@ -154,6 +217,40 @@ Colors work in most modern IDEs and terminals that support ANSI escape codes. Yo
 
 ```dart
 LoggerConfig.useColors = false;
+```
+
+### 🔌 Extensibility Hooks
+
+#### Custom Record Sink
+
+Forward every log record to external services:
+
+```dart
+LoggerConfig.onRecord = (record) {
+  // Forward to Crashlytics
+  FirebaseCrashlytics.instance.log(record.message);
+
+  // Forward to Sentry
+  Sentry.addBreadcrumb(Breadcrumb(message: record.message));
+
+  // Access full metadata
+  print('Level: ${record.level}');
+  print('Source: ${record.source}');
+  print('Time: ${record.time}');
+};
+```
+
+#### Custom Formatter
+
+Replace the built-in console formatter:
+
+```dart
+LoggerConfig.formatter = (record) {
+  final source = record.source != null
+      ? ' (${record.source!.filePath}:${record.source!.line})'
+      : '';
+  return '${record.level.label}$source: ${record.message}';
+};
 ```
 
 ### API Logging
@@ -198,9 +295,17 @@ Logger.lifecycle('dispose', 'Cleaning up resources');
 
 ### Log History
 
+Log history now stores full `LogRecord` objects with source locations:
+
 ```dart
 // Access stored logs (warnings, errors, critical)
 final history = LoggerConfig.logHistory;
+
+// Each record includes source location
+for (final record in history) {
+  print('${record.level}: ${record.message}');
+  print('Source: ${record.source}');
+}
 
 // Clear history
 LoggerConfig.clearHistory();
@@ -313,8 +418,12 @@ void main() {
   LoggerConfig.minLevel = LogLevel.debug;
   LoggerConfig.showTimestamp = true;
   LoggerConfig.showEmoji = true;
-  LoggerConfig.useColors = true; // Enable color-coded output
+  LoggerConfig.useColors = true;
   LoggerConfig.maxHistorySize = 100;
+
+  // Source locations are enabled by default in debug mode
+  // Customize format for your IDE:
+  LoggerConfig.clickableLinkFormat = LinkFormat.auto;
 
   runApp(MyApp());
 }
@@ -351,6 +460,33 @@ All these methods can be chained on any object:
 - `Logger.lifecycle(event, [details])` - Log lifecycle event
 - `Logger.divider([title])` - Log divider
 - `Logger.header(title)` - Log header
+
+### New Types
+
+- `SourceLocation` - Represents a source code location. Stores the original `Uri` (so `package:` URIs are preserved verbatim) plus line, optional column, and optional enclosing member. The legacy `filePath` getter and string constructor remain for back-compat.
+- `SourceLocationResolver` - Resolves call sites from stack traces
+- `LinkFormat` - Enum for IDE-clickable link formats
+- `LogRecord` - Structured log event record
+- `ConsoleFormatter` - Formats LogRecords for console output
+
+### Configuration
+
+- `LoggerConfig.enabled` - Master switch (default: `kDebugMode`)
+- `LoggerConfig.minLevel` - Minimum log level
+- `LoggerConfig.showTimestamp` - Show timestamps
+- `LoggerConfig.showEmoji` - Show emoji indicators
+- `LoggerConfig.useColors` - ANSI color output
+- `LoggerConfig.showSourceLocation` - Source location capture (default: `kDebugMode`)
+- `LoggerConfig.showFilePath` - Show file path
+- `LoggerConfig.showLineNumber` - Show line number
+- `LoggerConfig.showColumnNumber` - Show column number
+- `LoggerConfig.showMemberName` - Show enclosing member name
+- `LoggerConfig.useClickableLinks` - When `false`, omits the location segment entirely
+- `LoggerConfig.clickableLinkFormat` - Link format (default: `LinkFormat.auto`)
+- ~~`LoggerConfig.linkAnsiStyle`~~ - **Deprecated.** The clickable segment must be un-styled for IDE recognition; this value is no longer applied.
+- `LoggerConfig.onRecord` - Custom record sink
+- `LoggerConfig.formatter` - Custom formatter override
+- `LoggerConfig.maxHistorySize` - Max history entries
 
 ## 🤝 Contributing
 

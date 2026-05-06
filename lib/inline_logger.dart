@@ -13,6 +13,9 @@
 ///   release mode
 /// - 📊 **Log history** - Store important logs for crash reporting
 /// - 🔍 **Stack trace support** - Capture stack traces for errors
+/// - 📍 **Clickable source locations** - IDE-clickable links to the
+///   exact call site in your code
+/// - 🔌 **Extensibility hooks** - Custom formatters and record sinks
 ///
 /// ## Quick Start
 ///
@@ -34,4 +37,11 @@
 /// ```
 library;
 
-export 'src/inline_logger.dart';
+export 'src/extensions.dart';
+export 'src/formatters/console_formatter.dart';
+export 'src/link_format.dart';
+export 'src/log_level.dart';
+export 'src/log_record.dart';
+export 'src/logger.dart';
+export 'src/logger_config.dart';
+export 'src/source_location.dart';

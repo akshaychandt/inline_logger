@@ -8,6 +8,20 @@ void main() {
   LoggerConfig.minLevel = LogLevel.debug;
   LoggerConfig.useColors = true; // Enable colored console output
 
+  // NEW: Source location is on by default in debug mode.
+  // These are the defaults, shown here for demonstration:
+  LoggerConfig.showSourceLocation = true;
+  LoggerConfig.clickableLinkFormat = LinkFormat.auto;
+  LoggerConfig.useClickableLinks = true;
+
+  // Optional: Hook into every log record
+  LoggerConfig.onRecord = (record) {
+    // You could forward to Crashlytics, Sentry, etc.
+    // print('Record: ${record.level.label} - ${record.message}');
+    // print('Source: ${record.source}');
+  };
+
+  // Direct call — the clickable link will point to THIS line:
   Logger.info('App starting', 'main');
 
   runApp(const MyApp());
@@ -52,6 +66,7 @@ class _ExampleHomePageState extends State<ExampleHomePage> {
     Logger.header('INCREMENT COUNTER');
 
     setState(() {
+      // Inline call — the clickable link will point to THIS line:
       _counter = (_counter + 1).logSuccess('New counter value');
     });
 
@@ -145,14 +160,56 @@ class _ExampleHomePageState extends State<ExampleHomePage> {
     }
   }
 
+  void _demonstrateSourceLocations() {
+    Logger.header('SOURCE LOCATION DEMO');
+
+    // Each of these will show a clickable link to THIS file:
+    Logger.info('Direct call from _demonstrateSourceLocations');
+    'inline value'.logDebug('Inline call');
+
+    // Show different link formats
+    LoggerConfig.clickableLinkFormat = LinkFormat.fileUri;
+    Logger.info('fileUri format');
+
+    LoggerConfig.clickableLinkFormat = LinkFormat.bareAbsolute;
+    Logger.info('bareAbsolute format');
+
+    LoggerConfig.clickableLinkFormat = LinkFormat.packageUri;
+    Logger.info('packageUri format');
+
+    // Location segment is omitted entirely when this is false.
+    LoggerConfig.useClickableLinks = false;
+    Logger.info('no location segment');
+
+    // Reset to defaults
+    LoggerConfig.clickableLinkFormat = LinkFormat.auto;
+    LoggerConfig.useClickableLinks = true;
+
+    Logger.divider();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Check console for source location examples!',
+          ),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
   void _showLogHistory() {
     Logger.header('LOG HISTORY');
 
     final history = LoggerConfig.logHistory;
     Logger.info('Total logs in history: ${history.length}');
 
-    for (var log in history) {
-      Logger.verbose(log);
+    for (var record in history) {
+      Logger.verbose(
+        '${record.level.label}: ${record.message}'
+        '${record.source != null ? ' (${record.source})' : ''}',
+      );
     }
 
     Logger.divider();
@@ -167,6 +224,7 @@ class _ExampleHomePageState extends State<ExampleHomePage> {
                 ? 'No logs in history yet.\n\n'
                     'Try triggering errors or warnings!'
                 : 'Found ${history.length} logs.\n\n'
+                    'Each log includes source location.\n\n'
                     'Check console for details.',
           ),
           actions: [
@@ -299,6 +357,12 @@ class _ExampleHomePageState extends State<ExampleHomePage> {
                     ),
                     const SizedBox(height: 8),
                     ElevatedButton.icon(
+                      onPressed: _demonstrateSourceLocations,
+                      icon: const Icon(Icons.location_on),
+                      label: const Text('Source Location Demo'),
+                    ),
+                    const SizedBox(height: 8),
+                    ElevatedButton.icon(
                       onPressed: _showLogHistory,
                       icon: const Icon(Icons.history),
                       label: const Text('View Log History'),
@@ -322,11 +386,14 @@ class _ExampleHomePageState extends State<ExampleHomePage> {
                       children: [
                         Icon(Icons.info_outline, color: Colors.blue),
                         SizedBox(width: 8),
-                        Text(
-                          'Open your console to see logs!',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: Colors.blue,
+                        Expanded(
+                          child: Text(
+                            'Open your console to see logs with '
+                            'clickable source locations!',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue,
+                            ),
                           ),
                         ),
                       ],
@@ -334,8 +401,10 @@ class _ExampleHomePageState extends State<ExampleHomePage> {
                     SizedBox(height: 8),
                     Text(
                       'All logging is visible in your IDE console '
-                      'or terminal. Try clicking the buttons above to see '
-                      'different logging features in action.',
+                      'or terminal. Click on the file paths in the '
+                      'log output to jump directly to the source code. '
+                      'Try clicking the buttons above to see different '
+                      'logging features in action.',
                       style: TextStyle(fontSize: 12),
                     ),
                   ],
