@@ -204,7 +204,7 @@ LoggerConfig.repeatWindow = const Duration(minutes: 10);
 Suppression is **console-only and lossless**:
 
 - `onRecord` and `logHistory` run *above* the collapser and always see 100% of records, so Crashlytics/Sentry forwarding is unaffected.
-- A pending count is never discarded — it is surfaced as a `↺ xN` summary when the window elapses, when a different message interrupts the run, when the entry is evicted past `repeatMemory`, or on an explicit `Logger.flushRepeats()`.
+- A pending count is never discarded — it is surfaced as a `↺ xN` summary on the next log after the window elapses, when a different message interrupts the run, when the entry is evicted past `repeatMemory`, when `collapseRepeats` is turned back off, or on an explicit `Logger.flushRepeats()`. There is no timer, so a run that is still open when your app goes quiet needs `Logger.flushRepeats()` to report — call it from a lifecycle hook.
 - The window is measured from a run's **first** occurrence, so a message repeating every 5 minutes reports in every 10 rather than staying hidden forever.
 - It is skipped entirely whenever `LoggerConfig.formatter` is set.
 
@@ -256,10 +256,10 @@ The leading `[MyRepo] ` gutter is drawn by the console host, not by this package
 
 #### What the IDE link scanners actually require
 
-The trailing `(...)` segment is un-styled (no ANSI) and is always the last thing on its physical line, because that is what the two scanners need:
+The trailing `(...)` segment is always the last **text** on its physical line, and its characters are contiguous — no ANSI escape ever appears *between* the parentheses. Styling that wraps the segment from the outside is safe, which is why the location can be dimmed by default. The rules being satisfied are:
 
-- **VS Code (Dart-Code)** requires both `:line:column` — a bare `main.dart:42` is not linkified. It matches the **first** `.dart` occurrence on a line, so a `.dart` substring earlier in your message wins instead. Set `LoggerConfig.locationPlacement = LocationPlacement.ownLine` to make the match unambiguous.
-- **IntelliJ / Android Studio** treats the column as optional, but requires a non-alphanumeric character immediately before the `package:` / `file:` scheme — which is what the opening parenthesis provides.
+- **VS Code (Dart-Code)** requires both `:line:column` — a bare `main.dart:42` is not linkified. It matches the **first** `.dart` occurrence on a line, so a `.dart` substring earlier in your message wins instead. Set `LoggerConfig.locationPlacement = LocationPlacement.ownLine` to make the match unambiguous. Style escapes do not interfere: they fall outside the pattern's character class, and the console parses ANSI into styled spans before link detection runs.
+- **IntelliJ / Android Studio** treats the column as optional, but requires a non-alphanumeric character immediately before the `package:` / `file:` scheme — which is what the opening parenthesis provides. A style escape sits before that parenthesis, not between it and the scheme.
 
 Both resolve `package:` URIs through your package config, so eliding directories inside one breaks resolution and kills the link. The location is therefore never abbreviated.
 
@@ -349,13 +349,13 @@ inline_logger automatically adds ANSI color codes to your console output, making
 - **Error** logs appear in red
 - **Critical** logs appear in bright red
 
-By default the colour covers the whole line up to the clickable location, which stays un-styled so IDE link scanners can match it:
+By default the level's colour covers the line body, and the location carries its own dim span so it recedes:
 
 ```
-\x1B[31mERR boom\x1B[0m (package:app/main.dart:9:4)
+\x1B[31mERR boom\x1B[0m \x1B[90m(package:app/main.dart:9:4)\x1B[0m
 ```
 
-The location carries its own dim style (`LoggerConfig.locationStyle`, gray by default) so it recedes rather than competing with the message. Both spans sit strictly outside the parentheses, so the segment's text reaches the IDE link scanners as one unbroken run.
+Both spans sit strictly outside the parentheses, so the segment's text reaches the IDE link scanners as one unbroken run.
 
 `ColorScope.line` extends the level's span over the location too; `ColorScope.level` narrows it to just the `ERR` token. Note that an ANSI reset returns the foreground to the terminal default, which is *not* necessarily the colour a console uses for un-styled text — that is why an un-styled location shows up amber in the VS Code Debug Console, and why `ColorScope.level` renders the text before and after the token in two different colours.
 
@@ -485,7 +485,7 @@ class HomeViewModel extends ChangeNotifier {
   Future<void> loadUsers() async {
     Logger.header('LOAD USERS');
 
-    _isLoading = true.logState('isLoading');
+    _isLoading = true.logDebug('isLoading');
     notifyListeners();
 
     try {
@@ -508,7 +508,7 @@ class HomeViewModel extends ChangeNotifier {
     } catch (e, stackTrace) {
       Logger.error('Failed to load users: $e', 'Error', stackTrace);
     } finally {
-      _isLoading = false.logState('isLoading');
+      _isLoading = false.logDebug('isLoading');
       notifyListeners();
       Logger.divider();
     }
@@ -634,6 +634,8 @@ All these methods can be chained on any object:
 - `LoggerConfig.useColors` - ANSI color output
 - `LoggerConfig.colorScope` - `body` (default), `line`, or `level`
 - `LoggerConfig.locationStyle` - ANSI style for the location segment (default: `AnsiColors.gray`; `''` to disable)
+- `LoggerConfig.locationPrefix` - prefix for the `ownLine` row (default: `'↳ '`)
+- `LoggerConfig.dividerWidth` - width of `Logger.divider` rules (default: `60`)
 - `LoggerConfig.keyPlacement` - `developerLogName` (default) or `inline`
 - `LoggerConfig.developerLogName` - The `[name] ` gutter, and the fallback for keyless records (default: `'IL'`)
 - `LoggerConfig.dividerWidth` - Width of `Logger.divider` rules (default: `60`)
@@ -646,7 +648,7 @@ All these methods can be chained on any object:
 - `LoggerConfig.showMemberName` - Show enclosing member name
 - `LoggerConfig.useClickableLinks` - When `false`, omits the location segment entirely
 - `LoggerConfig.clickableLinkFormat` - Link format (default: `LinkFormat.auto`)
-- ~~`LoggerConfig.linkAnsiStyle`~~ - **Deprecated.** The clickable segment must be un-styled for IDE recognition; this value is no longer applied.
+- ~~`LoggerConfig.linkAnsiStyle`~~ - **Deprecated**, superseded by `locationStyle`. It styled the segment's *interior*, which does break the IDE scanners; `locationStyle` wraps it from outside, which does not.
 - `LoggerConfig.collapseRepeats` - Collapse identical console lines (default: `false`)
 - `LoggerConfig.repeatWindow` / `repeatMemory` / `repeatSummaryExcerpt` - Collapser tuning
 - `LoggerConfig.onRecord` - Custom record sink

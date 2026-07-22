@@ -8,7 +8,10 @@ import 'package:inline_logger/src/repeat_tracker.dart';
 void main() {
   // LoggerConfig is entirely static, so without this a flag set by one
   // test leaks into every test that follows it.
-  tearDown(LoggerConfig.reset);
+  tearDown(() {
+    Logger.debugEmitHook = null;
+    LoggerConfig.reset();
+  });
 
   group('SourceLocation', () {
     test('creates with required fields', () {
@@ -975,9 +978,15 @@ void main() {
       LoggerConfig.useColors = true;
       LoggerConfig.colorScope = ColorScope.line;
       final output = ConsoleFormatter.format(record);
-      // Exactly two escapes: one opening the span, one closing it.
-      expect('\x1B['.allMatches(output), hasLength(2));
+      // The location takes the level's colour, not locationStyle's gray.
       expect(output, isNot(contains(AnsiColors.gray)));
+      // Every physical line is independently balanced: equal numbers of
+      // opening and closing escapes, and no span left open at line end.
+      for (final line in output.split('\n')) {
+        final opens = RegExp(r'\x1B\[\d+m').allMatches(line).length;
+        final resets = '\x1B[0m'.allMatches(line).length;
+        expect(opens - resets, resets, reason: line);
+      }
     });
 
     test('ColorScope.level colours only the token', () {
@@ -993,10 +1002,12 @@ void main() {
       LoggerConfig.useColors = true;
       LoggerConfig.colorScope = ColorScope.line;
       final output = ConsoleFormatter.format(record);
+      // The span is closed and reopened around the joiner so that every
+      // physical line stays independently balanced.
       expect(
         output,
-        '${LogLevel.info.color}INF Hello world'
-        ' (package:my_app/main.dart:42:23)\x1B[0m',
+        '${LogLevel.info.color}INF Hello world\x1B[0m'
+        ' ${LogLevel.info.color}(package:my_app/main.dart:42:23)\x1B[0m',
       );
     });
 
@@ -1112,6 +1123,35 @@ void main() {
       expect(ConsoleFormatter.format(record), endsWith(':42:1)'));
     });
 
+    test('a whitespace-only key is absent from both paths', () {
+      LoggerConfig.keyPlacement = KeyPlacement.inline;
+      final padded = LogRecord(
+        time: record.time,
+        level: LogLevel.info,
+        message: 'Hello',
+        key: '   ',
+      );
+      expect(ConsoleFormatter.format(padded), 'INF Hello');
+      expect(Logger.resolveLogName('   '), 'IL');
+    });
+
+    test('formatPlain flattens newlines and keeps full precision', () {
+      LoggerConfig.showTimestamp = false; // console flag, ignored by plain
+      final multiline = LogRecord(
+        time: DateTime(2026, 7, 22, 11, 37, 44, 659),
+        level: LogLevel.error,
+        message: 'first line\nsecond line',
+        key: 'Sink',
+      );
+
+      final plain = ConsoleFormatter.formatPlain(multiline);
+      expect(plain, isNot(contains('\n')));
+      expect(plain, contains('first line second line'));
+      // A file sink has no time column of its own, so the timestamp is
+      // forced on at full precision regardless of showTimestamp.
+      expect(plain, startsWith('[${multiline.time.toIso8601String()}]'));
+    });
+
     test('a repeat summary carries no location and no parentheses', () {
       final summary = ConsoleFormatter.formatRepeatSummary(record, 3);
       expect(summary, 'INF ↺ x3 Hello world');
@@ -1162,6 +1202,14 @@ void main() {
       );
     });
 
+    test('stripping .dart is looped to a fixed point', () {
+      // A single pass can splice a fresh '.dart' out of the surrounding
+      // text, which would then reach the gutter and steal the click.
+      expect(Logger.resolveLogName('..dartdart'), isNot(contains('.dart')));
+      expect(Logger.resolveLogName('.da.dartrt'), isNot(contains('.dart')));
+      expect(Logger.resolveLogName('a..dartdartb'), 'ab');
+    });
+
     test('newlines cannot split the gutter across rows', () {
       expect(Logger.resolveLogName('Repo\nInjected'), 'Repo Injected');
       expect(Logger.resolveLogName('  padded  '), 'padded');
@@ -1183,6 +1231,176 @@ void main() {
       expect(Logger.resolveLogName(null), 'InlineLogger');
       LoggerConfig.keyPlacement = KeyPlacement.inline;
       expect(Logger.resolveLogName('Repo'), 'InlineLogger');
+    });
+  });
+
+  group('Emission (what actually reaches dev.log)', () {
+    late List<
+        ({
+          String line,
+          String name,
+          LogLevel level,
+          DateTime? time,
+        })> out;
+
+    setUp(() {
+      LoggerConfig.reset();
+      LoggerConfig.enabled = true;
+      LoggerConfig.useColors = false;
+      out = [];
+      Logger.debugEmitHook = (line, {
+        required name,
+        required level,
+        time,
+        stackTrace,
+      }) =>
+          out.add((line: line, name: name, level: level, time: time));
+    });
+
+    test('the gutter carries the key end to end', () {
+      Logger.error('sync failed', 'VideoProgressRepo');
+
+      expect(out, hasLength(1));
+      expect(out.single.name, 'VideoProgressRepo');
+      expect(out.single.level, LogLevel.error);
+      // The key lives in the gutter, so it is not repeated in the line.
+      expect(out.single.line, isNot(contains('@VideoProgressRepo')));
+      expect(out.single.line, contains('ERR sync failed'));
+    });
+
+    test('dev.log is stamped with the record time, not its own now()', () {
+      LogRecord? captured;
+      LoggerConfig.onRecord = (r) => captured = r;
+
+      Logger.info('hello');
+
+      expect(out.single.time, isNotNull);
+      expect(out.single.time, captured!.time);
+    });
+
+    test('divider honours minLevel', () {
+      LoggerConfig.minLevel = LogLevel.critical;
+      Logger.divider('SHOULD NOT APPEAR');
+      Logger.header('NOR THIS');
+      expect(out, isEmpty);
+
+      LoggerConfig.minLevel = LogLevel.debug;
+      Logger.divider();
+      expect(out, hasLength(1));
+    });
+
+    test('a titled rule is exactly dividerWidth columns', () {
+      Logger.divider('API REQUEST');
+      Logger.divider();
+
+      for (final entry in out) {
+        expect(
+          entry.line.length,
+          LoggerConfig.dividerWidth,
+          reason: entry.line,
+        );
+      }
+      expect(out.first, isNot(equals(out.last)));
+    });
+
+    test('apiRequest emits one rule, not two', () {
+      Logger.apiRequest(endpoint: '/users', method: 'GET');
+      final rules = out.where((e) => e.line.startsWith('──')).toList();
+      expect(rules, hasLength(1));
+    });
+
+    test('lifecycle keeps the event when details are supplied', () {
+      Logger.lifecycle('didChangeDependencies', 'theme changed');
+      expect(out.single.line, contains('didChangeDependencies'));
+      expect(out.single.line, contains('theme changed'));
+      expect(out.single.name, 'Lifecycle');
+    });
+
+    test('state moves the name into the message', () {
+      Logger.state('isLoading', false);
+      expect(out.single.name, 'State');
+      expect(out.single.line, contains('isLoading = false'));
+    });
+
+    test('the collapser is wired into the real logging path', () {
+      LoggerConfig.collapseRepeats = true;
+
+      for (var i = 0; i < 4; i++) {
+        Logger.error('identical failure', 'Repo');
+      }
+      // One printed line; the other three are suppressed.
+      expect(out, hasLength(1));
+
+      Logger.flushRepeats();
+      expect(out, hasLength(2));
+      expect(out.last.line, contains('↺ x3'));
+    });
+
+    test('a run of one suppressed line reports x1, not x2', () {
+      LoggerConfig.collapseRepeats = true;
+
+      // One call site, twice: the source location is part of the
+      // identity, so two calls on different lines would not collapse.
+      for (var i = 0; i < 2; i++) {
+        Logger.warning('flaky', 'Net');
+      }
+      Logger.flushRepeats();
+
+      expect(out, hasLength(2));
+      expect(out.last.line, contains('↺ x1'));
+      expect(out.last.line, isNot(contains('↺ x2')));
+    });
+
+    test('turning the collapser off drains what it suppressed', () {
+      LoggerConfig.collapseRepeats = true;
+      for (var i = 0; i < 2; i++) {
+        Logger.warning('flaky', 'Net');
+      }
+      expect(out, hasLength(1));
+
+      LoggerConfig.collapseRepeats = false;
+      Logger.info('something else');
+
+      expect(out.map((e) => e.line).join('\n'), contains('↺ x1'));
+    });
+
+    test('installing a formatter drains what the collapser suppressed', () {
+      LoggerConfig.collapseRepeats = true;
+      for (var i = 0; i < 2; i++) {
+        Logger.warning('flaky', 'Net');
+      }
+
+      LoggerConfig.formatter = (r) => 'CUSTOM ${r.message}';
+      Logger.info('next');
+
+      final joined = out.map((e) => e.line).join('\n');
+      expect(joined, contains('↺ x1'));
+      expect(joined, contains('CUSTOM next'));
+    });
+
+    test('flushRepeats works even once logging is disabled', () {
+      LoggerConfig.collapseRepeats = true;
+      for (var i = 0; i < 2; i++) {
+        Logger.warning('flaky', 'Net');
+      }
+
+      LoggerConfig.enabled = false;
+      Logger.flushRepeats();
+
+      expect(out.last.line, contains('↺ x1'));
+    });
+
+    test('a summary is colour-coded like the line it summarises', () {
+      LoggerConfig.useColors = true;
+      LoggerConfig.collapseRepeats = true;
+
+      for (var i = 0; i < 2; i++) {
+        Logger.error('boom', 'Repo');
+      }
+      Logger.flushRepeats();
+
+      expect(out.last.line, startsWith(LogLevel.error.color));
+      expect(out.last.line, endsWith('\x1B[0m'));
     });
   });
 
@@ -1342,6 +1560,27 @@ void main() {
 
       expect(summaries.map((e) => e.value), [1]);
       expect(summaries.single.key.message, 'B');
+    });
+
+    test('a record carrying a stack trace is never collapsed', () {
+      // The trace is not part of the identity, so collapsing would
+      // silently discard a trace that differs from the first one.
+      final trace = StackTrace.current;
+      LogRecord withTrace(DateTime t) => LogRecord(
+            time: t,
+            level: LogLevel.error,
+            message: 'sync failed',
+            key: 'Repo',
+            stackTrace: trace,
+            source: SourceLocation(
+              filePath: 'package:my_app/repo.dart',
+              line: 176,
+            ),
+          );
+
+      expect(RepeatTracker.observe(withTrace(t0), sink), isFalse);
+      expect(RepeatTracker.observe(withTrace(t0), sink), isFalse);
+      expect(RepeatTracker.observe(withTrace(t0), sink), isFalse);
     });
 
     test('flushRepeats surfaces everything still pending', () {

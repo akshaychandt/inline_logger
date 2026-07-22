@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../console_style.dart';
 import '../link_format.dart';
+import '../log_level.dart';
 import '../log_record.dart';
 import '../logger_config.dart';
 import '../source_location.dart';
@@ -17,18 +18,24 @@ import '../source_location.dart';
 ///
 /// ## What the IDE link scanners actually require
 ///
-/// The trailing parenthesised location is emitted with no ANSI styling,
-/// as the last thing on its physical line, because that is what the two
-/// scanners need:
+/// The trailing parenthesised location is the last **text** on its
+/// physical line and its characters are contiguous — no ANSI escape ever
+/// appears *between* the parentheses. Styling that wraps the segment
+/// from the outside is safe, which is why [LoggerConfig.locationStyle]
+/// can dim it. The rules being satisfied are:
 ///
 /// * **VS Code (Dart-Code)** requires both `:line:column`; a bare
 ///   `file.dart:42` is not linkified. It matches the *first* `.dart`
 ///   occurrence on a line, so anything earlier in the line that looks
 ///   like a Dart path wins instead — use [LocationPlacement.ownLine] to
-///   make the match unambiguous.
+///   make the match unambiguous. Escapes do not interfere: the pattern's
+///   character class excludes them, and the console strips ANSI into
+///   styled spans before link detection runs.
 /// * **IntelliJ / Android Studio** treats the column as optional, but
 ///   requires a non-alphanumeric character immediately before the
-///   `package:` / `file:` scheme — hence the opening parenthesis.
+///   `package:` / `file:` scheme. The opening parenthesis supplies it,
+///   and any style escape sits before that parenthesis rather than
+///   between it and the scheme.
 ///
 /// Both resolve `package:` URIs through the package config, so eliding
 /// directories inside one breaks resolution and kills the link. The
@@ -87,9 +94,25 @@ class ConsoleFormatter {
       level: record.level,
       message: _excerpt(record.message, LoggerConfig.repeatSummaryExcerpt),
       key: record.key,
-      repeatCount: count < 2 ? 2 : count,
+      repeatCount: count < 1 ? 1 : count,
     );
-    return _renderBody(summary, config);
+    // isSummary, not repeatCount > 1, gates the glyph — so a run with a
+    // single suppressed occurrence reports the honest `↺ x1` instead of
+    // being rounded up to `↺ x2`.
+    final body = _renderBody(summary, config, isSummary: true);
+    return _wrapBody(body, record.level, config);
+  }
+
+  /// Apply the level's colour span to an assembled body, if the current
+  /// [ColorScope] calls for it.
+  static String _wrapBody(
+    String body,
+    LogLevel level,
+    _FormatterConfig config,
+  ) {
+    if (!config.useColors) return body;
+    if (config.colorScope == ColorScope.level) return body;
+    return '${level.color}$body$_reset';
   }
 
   // ────────────────────────────────────────────────────────────────
@@ -111,10 +134,12 @@ class ConsoleFormatter {
         ? '\n${config.locationPrefix}'
         : ' ';
 
-    // ColorScope.line runs one span over the whole thing, so the
-    // location needs no style of its own.
+    // ColorScope.line runs the level's colour over the location too. The
+    // span is closed and reopened around the joiner so that every
+    // physical line is independently balanced — an SGR span left open
+    // across a newline bleeds into unrelated console output.
     if (color != null && config.colorScope == ColorScope.line) {
-      return '$color$body$joiner$location$_reset';
+      return '$color$body$_reset$joiner$color$location$_reset';
     }
 
     final styled = _styleLocation(location, config);
@@ -134,7 +159,11 @@ class ConsoleFormatter {
   }
 
   /// Render everything up to (but excluding) the location segment.
-  static String _renderBody(LogRecord record, _FormatterConfig config) {
+  static String _renderBody(
+    LogRecord record,
+    _FormatterConfig config, {
+    bool isSummary = false,
+  }) {
     final parts = <String>[];
 
     final timestamp = _renderTimestamp(record.time, config);
@@ -154,20 +183,25 @@ class ConsoleFormatter {
       parts.add(record.source!.member!);
     }
 
-    final key = record.key;
+    // Trimmed so a whitespace-only key is treated as absent here exactly
+    // as it is by Logger.resolveLogName on the gutter path.
+    final key = record.key?.trim();
     if (key != null &&
         key.isNotEmpty &&
         config.keyPlacement == KeyPlacement.inline) {
       parts.add('@$key');
     }
 
-    if (record.repeatCount > 1) {
+    if (isSummary || record.repeatCount > 1) {
       // No parentheses: the location segment owns the only parentheses
       // on the line, so an IDE scanner can never mistake this for one.
       parts.add('$_repeatGlyph x${record.repeatCount}');
     }
 
-    if (record.message.isNotEmpty) parts.add(record.message);
+    final message = config.flattenMessage
+        ? record.message.replaceAll(RegExp(r'\s+'), ' ').trim()
+        : record.message;
+    if (message.isNotEmpty) parts.add(message);
 
     return parts.join(' ');
   }
@@ -216,8 +250,10 @@ class ConsoleFormatter {
   /// Render the trailing `(<uri>:<line>:<col>)` segment, or null if it
   /// should be omitted.
   ///
-  /// The segment is intentionally un-styled (no ANSI codes) so the IDE's
-  /// stack-frame scanner can match it.
+  /// Returned bare. Any styling is layered on afterwards by
+  /// [_styleLocation] or the [ColorScope] span, always from strictly
+  /// outside the parentheses, so the segment's text stays contiguous for
+  /// the IDE stack-frame scanners.
   static String? _renderLocationSegment(
     SourceLocation? source,
     _FormatterConfig config,
@@ -314,6 +350,7 @@ class _FormatterConfig {
   final String locationStyle;
   final String locationPrefix;
   final KeyPlacement keyPlacement;
+  final bool flattenMessage;
 
   const _FormatterConfig({
     required this.showTimestamp,
@@ -333,6 +370,7 @@ class _FormatterConfig {
     required this.locationStyle,
     required this.locationPrefix,
     required this.keyPlacement,
+    required this.flattenMessage,
   });
 
   factory _FormatterConfig.fromLoggerConfig() {
@@ -354,14 +392,20 @@ class _FormatterConfig {
       locationStyle: LoggerConfig.locationStyle,
       locationPrefix: LoggerConfig.locationPrefix,
       keyPlacement: LoggerConfig.keyPlacement,
+      flattenMessage: false,
     );
   }
 
   /// Variant used by [ConsoleFormatter.formatPlain]: never coloured,
   /// never multi-line, and the key is always carried inline because a
   /// plain-text sink has no console gutter to render it into.
+  ///
+  /// The timestamp is forced on at full precision for the same reason:
+  /// a file sink or crash-report attachment has no time column of its
+  /// own, and [LoggerConfig.showTimestamp] is a console-display flag
+  /// that defaults to `false`.
   _FormatterConfig asPlain() => _FormatterConfig(
-        showTimestamp: showTimestamp,
+        showTimestamp: true,
         showEmoji: showEmoji,
         useColors: false,
         showSourceLocation: showSourceLocation,
@@ -371,14 +415,15 @@ class _FormatterConfig {
         showMemberName: showMemberName,
         useClickableLinks: useClickableLinks,
         clickableLinkFormat: clickableLinkFormat,
-        timestampStyle: timestampStyle,
+        timestampStyle: TimestampStyle.iso,
         colorScope: colorScope,
         levelStyle: levelStyle,
         locationPlacement: locationPlacement == LocationPlacement.none
             ? LocationPlacement.none
             : LocationPlacement.inline,
-        locationStyle: locationStyle,
+        locationStyle: '',
         locationPrefix: locationPrefix,
         keyPlacement: KeyPlacement.inline,
+        flattenMessage: true,
       );
 }

@@ -19,8 +19,9 @@ After:
 ### Output format changed (no API breaks)
 
 Every existing call signature, field name and type is unchanged. What
-changed is what the console prints. Each item below lists the one line
-that restores the old behaviour.
+changed is what the console prints. Most items below list the one line
+that restores the old behaviour; where none is given, the change is not
+revertable by configuration.
 
 * **The subsystem tag moved into the console's own gutter.** A record's
   key is now passed to `dart:developer`'s `log(name:)`, so the IDE draws
@@ -61,15 +62,34 @@ that restores the old behaviour.
   real captured column and a hardcoded `:1`, and defaulted to throwing
   the real one away. IDE jumps now land on the expression that logged.
   Restore: `LoggerConfig.showColumnNumber = false;`
-* **`divider` / `header` rules are 60 columns, were 122+.** A separator
-  whose job is reducing noise was itself wrapping to two rows. They now
-  also honour `kDebugMode` and `minLevel` (see *Fixed*), and
-  `apiRequest` / `apiResponse` emit one rule instead of two.
+* **Titled `divider` / `header` rules are 60 columns, were 122+.** A
+  titled rule used to be a full 60-column rule on *each* side of the
+  title; it is now a single `── title ` padded to 60, so it stops
+  wrapping to two rows. Untitled rules were already 60 and are
+  unchanged in width, but the glyph is now `─` rather than `=` and both
+  forms are dimmed with `locationStyle`. They also now honour
+  `kDebugMode` and `minLevel` (see *Fixed*), and `apiRequest` /
+  `apiResponse` emit one rule instead of two.
   Adjust: `LoggerConfig.dividerWidth = 122;`
 * **Built-in keys are no longer emoji-prefixed.** `@🧭 Navigation`,
   `@🔄 Lifecycle` and `@📊 State: name` become `Nav`, `Lifecycle` and
   `State`; `Logger.state` moves the state name into the message as
-  `name = value`.
+  `name = value`. No restore line: these are the literal `LogRecord.key`
+  values, so an `onRecord` consumer matching on the old strings must be
+  updated.
+* **`ConsoleFormatter.format` no longer contains `@key`** under the
+  default `keyPlacement`, because the console host draws it.
+  `ConsoleFormatter.formatPlain` always includes it.
+  Restore: `LoggerConfig.keyPlacement = KeyPlacement.inline;`
+* **Stack traces forwarded to the console are capped at 8 frames.**
+  0.2.x forwarded the whole trace, which becomes an entire extra
+  prefixed block in both IDE consoles. `LogRecord.stackTrace` always
+  keeps the full trace for `onRecord`.
+  Restore: `LoggerConfig.consoleStackTraceFrames = null;`
+* **`ConsoleFormatter.formatPlain` now always carries a full ISO
+  timestamp** and flattens newlines in the message, so
+  `logHistoryStrings` stays one self-describing line per record even
+  though `showTimestamp` defaults to `false` for the console.
 * **`logHistoryStrings` renders through `ConsoleFormatter.formatPlain`.**
   It previously returned `LogRecord(time: …, level: …)` debug dumps,
   matching neither the console output nor 0.1.x's format.
@@ -103,15 +123,19 @@ that restores the old behaviour.
   untouched and still returns `'INFO'`.
 * `LoggerConfig.consoleStackTraceFrames` (default `8`) — caps the stack
   trace forwarded to the console, which otherwise becomes an entire
-  extra prefixed block. `<asynchronous suspension>` markers do not count
-  against the limit, so an async error never loses its app frame.
-  `LogRecord.stackTrace` always keeps the full trace.
+  extra prefixed block. `<asynchronous suspension>` markers are kept and
+  do not count against the limit, so the budget is spent on real frames
+  — but a trace whose application frame sits below more than 8 framework
+  frames will still have it trimmed away; raise or disable the cap for
+  those. `LogRecord.stackTrace` always keeps the full trace.
 * **Opt-in repeat collapsing** (`LoggerConfig.collapseRepeats`, default
   `false`), with `repeatWindow`, `repeatMemory` and
   `repeatSummaryExcerpt`. Folds a retry loop's identical lines into a
   single line plus a `↺ xN` summary. Lossless by construction:
   `onRecord` and `logHistory` run above the collapser and always see
-  100% of records; a pending count is always surfaced, never dropped;
+  100% of records; a pending count is always surfaced, never dropped
+  (on the next log after the window elapses, or via
+  `Logger.flushRepeats()` — there is no timer);
   and the collapser is skipped entirely when `formatter` is set. There
   is no `Timer` involved, so it is web-safe and cannot leave a
   `testWidgets` with a pending timer.

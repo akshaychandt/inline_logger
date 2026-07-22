@@ -31,8 +31,12 @@ enum TimestampStyle {
 /// Only applies when [LoggerConfig.useColors] is `true`.
 enum ColorScope {
   /// Colour the whole line up to (but not including) the clickable
-  /// location segment, which stays un-styled so IDE link scanners can
-  /// match it. This is the default, and matches 0.2.x.
+  /// location segment. This is the default.
+  ///
+  /// The level's span ends before the location, exactly as in 0.2.x. The
+  /// location is not left bare, though: it carries its own
+  /// [LoggerConfig.locationStyle] span (dim gray by default). Set
+  /// `locationStyle = ''` for the fully bare 0.2.x segment.
   body,
 
   /// Colour only the level token, leaving timestamp, key and message
@@ -45,12 +49,13 @@ enum ColorScope {
   /// the text before it.
   level,
 
-  /// Colour the entire line including the location segment.
+  /// Colour the entire line including the location segment, so the
+  /// location takes the level's colour instead of
+  /// [LoggerConfig.locationStyle]'s.
   ///
-  /// Consoles that strip ANSI before scanning for links are unaffected,
-  /// but this puts an escape sequence immediately after the closing
-  /// parenthesis, so verify click-to-source still works in your IDE
-  /// before relying on it.
+  /// The span is closed and reopened around the joiner, so each physical
+  /// line stays independently balanced under
+  /// [LocationPlacement.ownLine].
   line,
 }
 

@@ -21,10 +21,12 @@ typedef RepeatSummarySink = void Function(LogRecord sample, int suppressed);
 ///   [LoggerConfig.onRecord] in [Logger.log], so history sinks and
 ///   crash reporters always observe 100% of records. Only the console
 ///   line is suppressed.
-/// * A pending count is always surfaced as a `↺ xN` summary — when the
-///   run's window elapses, when a different message interrupts it, when
-///   the entry is evicted from the bounded LRU, or on an explicit
-///   [Logger.flushRepeats].
+/// * A pending count is always surfaced as a `↺ xN` summary — on the
+///   next log after the run's window elapses, when a different message
+///   interrupts it, when the entry is evicted from the bounded LRU,
+///   when collapsing is switched back off, or on an explicit
+///   [Logger.flushRepeats]. Since there is no timer, a run still open
+///   when logging goes quiet needs [Logger.flushRepeats] to report.
 ///
 /// There is no [Timer] anywhere in this class: everything happens
 /// synchronously inside the logging call. That keeps it web-compatible
@@ -43,7 +45,21 @@ class RepeatTracker {
   /// [emitSummary] is invoked synchronously, before this call returns,
   /// for every pending count that becomes due.
   static bool observe(LogRecord record, RepeatSummarySink emitSummary) {
-    if (!LoggerConfig.collapseRepeats) return false;
+    if (!LoggerConfig.collapseRepeats) {
+      // Turning the feature off mid-run must not strand whatever was
+      // already suppressed: drain it on the next log rather than letting
+      // the counts die with the flag.
+      if (_entries.isNotEmpty) flushAll(emitSummary);
+      return false;
+    }
+
+    // A record carrying a stack trace is never collapsed: the trace is
+    // not part of the identity, so suppressing the second occurrence
+    // would silently discard a trace that differs from the first.
+    if (record.stackTrace != null) {
+      _flushPending(emitSummary);
+      return false;
+    }
 
     final now = record.time;
     final id = _identity(record);

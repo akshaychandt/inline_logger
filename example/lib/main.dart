@@ -2,11 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:inline_logger/inline_logger.dart';
 
 void main() {
-  // Configure logger for development
-  LoggerConfig.showTimestamp = true;
-  LoggerConfig.showEmoji = true;
+  // This example runs on the 0.3.0 defaults so the console shows what a
+  // new user actually gets: the log's key in the IDE's own gutter, a
+  // fixed-width level token, and a dimmed clickable location.
   LoggerConfig.minLevel = LogLevel.debug;
   LoggerConfig.useColors = true; // Enable colored console output
+
+  // Both default to false in 0.3.0. Uncomment for a plain `flutter run`
+  // terminal, which has no time column of its own.
+  // LoggerConfig.showTimestamp = true;
+  // LoggerConfig.showEmoji = true;
 
   // NEW: Source location is on by default in debug mode.
   // These are the defaults, shown here for demonstration:
@@ -193,8 +198,16 @@ class _ExampleHomePageState extends State<ExampleHomePage> {
     LoggerConfig.useClickableLinks = false;
     Logger.info('no location segment', 'Demo');
 
-    LoggerConfig.reset();
-    LoggerConfig.enabled = true;
+    // Restore field by field rather than calling LoggerConfig.reset(),
+    // which would also null the onRecord hook installed in main() and
+    // clear the history the "Log History" button displays.
+    LoggerConfig.keyPlacement = KeyPlacement.developerLogName;
+    LoggerConfig.developerLogName = 'IL';
+    LoggerConfig.showTimestamp = false;
+    LoggerConfig.timestampStyle = TimestampStyle.clock;
+    LoggerConfig.levelStyle = LevelStyle.short;
+    LoggerConfig.showEmoji = false;
+    LoggerConfig.useClickableLinks = true;
     Logger.divider();
 
     if (mounted) {

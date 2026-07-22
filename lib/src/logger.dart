@@ -68,8 +68,12 @@ class Logger {
     // Repeat collapsing is console-only, and never runs when a custom
     // formatter is installed — both `onRecord` above and `formatter`
     // below must observe 100% of records.
-    if (custom == null && RepeatTracker.observe(record, _emitRepeatSummary)) {
-      return;
+    if (custom == null) {
+      if (RepeatTracker.observe(record, _emitRepeatSummary)) return;
+    } else {
+      // Installing a formatter mid-run bypasses the collapser, so drain
+      // anything it had already suppressed rather than stranding it.
+      RepeatTracker.flushAll(_emitRepeatSummary);
     }
 
     final formatted =
@@ -144,8 +148,11 @@ class Logger {
   /// Call this before tearing down an isolate, or from a lifecycle hook
   /// when the app backgrounds, so that a collapsed run is never left
   /// unreported. No-op when [LoggerConfig.collapseRepeats] is `false`.
+  /// Deliberately not gated on [LoggerConfig.enabled]: the tracker only
+  /// ever holds counts accumulated while logging was enabled, so
+  /// emitting them is always the lossless choice — and disabling
+  /// logging is exactly when a stranded count would be lost for good.
   static void flushRepeats() {
-    if (!LoggerConfig.enabled) return;
     RepeatTracker.flushAll(_emitRepeatSummary);
   }
 
@@ -245,6 +252,24 @@ class Logger {
   /// the forwarded stack trace, and stamps the record's own time so
   /// DevTools' timestamp column matches [LogRecord.time] rather than
   /// being a few microseconds later.
+  /// Test seam mirroring every `dev.log` call.
+  ///
+  /// `dart:developer` output cannot be observed from a unit test, which
+  /// left the whole emission path — the gutter name, the explicit
+  /// `time:`, the trimmed stack trace, the divider gates and the
+  /// collapser's production wiring — assertable only in pieces. Each of
+  /// those could be reverted individually with a fully green suite,
+  /// which is exactly how a regression that disabled the tagged gutter
+  /// slipped through once already.
+  @visibleForTesting
+  static void Function(
+    String formatted, {
+    required String name,
+    required LogLevel level,
+    DateTime? time,
+    StackTrace? stackTrace,
+  })? debugEmitHook;
+
   static void _emit(
     String formatted, {
     String? key,
@@ -252,12 +277,23 @@ class Logger {
     DateTime? time,
     StackTrace? stackTrace,
   }) {
+    final name = resolveLogName(key);
+    final trimmed = _trimStack(stackTrace);
+
+    debugEmitHook?.call(
+      formatted,
+      name: name,
+      level: level,
+      time: time,
+      stackTrace: trimmed,
+    );
+
     dev.log(
       formatted,
-      name: resolveLogName(key),
+      name: name,
       time: time,
       level: _getLogLevel(level),
-      stackTrace: _trimStack(stackTrace),
+      stackTrace: trimmed,
     );
   }
 
@@ -284,6 +320,10 @@ class Logger {
       ConsoleFormatter.formatRepeatSummary(sample, suppressed),
       key: sample.key,
       level: sample.level,
+      // Stamped at the run's start, matching the timestamp the summary
+      // renders inline — otherwise DevTools' column and the line itself
+      // would disagree by up to repeatWindow.
+      time: sample.time,
     );
   }
 
@@ -304,15 +344,24 @@ class Logger {
     return fallback.isEmpty ? 'IL' : fallback;
   }
 
-  static String _stripUnsafe(String value) =>
-      value.replaceAll('.dart', '').replaceAll(RegExp(r'[\r\n]+'), ' ').trim();
+  static String _stripUnsafe(String value) {
+    var out = value.replaceAll(RegExp(r'[\r\n]+'), ' ');
+    // Looped to a fixed point: a single pass can splice a fresh `.dart`
+    // out of the surrounding text — `'..dartdart'` becomes `'.dart'`,
+    // which would then reach the gutter and steal the click target.
+    while (out.contains('.dart')) {
+      out = out.replaceAll('.dart', '');
+    }
+    return out.trim();
+  }
 
   /// Keep only the first [LoggerConfig.consoleStackTraceFrames] real
   /// frames.
   ///
   /// `<asynchronous suspension>` markers are preserved without counting
-  /// against the limit, so a Flutter async error never loses the
-  /// application frame that sits below them.
+  /// against the limit, so the budget is spent on real frames. This is
+  /// still head-truncation: a frame below more than [limit] real frames
+  /// is dropped regardless.
   static StackTrace? _trimStack(StackTrace? trace) {
     if (trace == null) return null;
     final limit = LoggerConfig.consoleStackTraceFrames;

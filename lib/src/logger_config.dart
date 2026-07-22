@@ -140,7 +140,7 @@ class LoggerConfig {
 
   /// How much of the line the level's ANSI colour covers.
   /// Default: [ColorScope.body] — everything except the trailing
-  /// location segment, which must stay un-styled for IDE link scanners.
+  /// location segment, which instead carries its own [locationStyle].
   static ColorScope colorScope = ColorScope.body;
 
   /// How the severity level is rendered. Default: [LevelStyle.short],
@@ -217,8 +217,11 @@ class LoggerConfig {
   /// entirely. Default: `8`.
   ///
   /// `<asynchronous suspension>` markers are preserved and do not count
-  /// against the limit, so a Flutter async error never loses its
-  /// application frame. [LogRecord.stackTrace] always keeps the full
+  /// against the limit, so the budget is spent on real frames. Note that
+  /// this is a simple head-truncation: an application frame sitting
+  /// below more than [consoleStackTraceFrames] framework frames is still
+  /// trimmed away — raise the cap or set it to `null` when debugging
+  /// deep async chains. [LogRecord.stackTrace] always keeps the full
   /// trace for [onRecord] consumers.
   static int? consoleStackTraceFrames = 8;
 
@@ -232,7 +235,8 @@ class LoggerConfig {
   /// Useful for retry loops and polling timers that log the same
   /// failure indefinitely. Two identical `(level, key, message,
   /// source)` records within [repeatWindow] print once; the suppressed
-  /// count is then reported as a summary line when the window elapses,
+  /// count is then reported as a summary line on the next log after the
+  /// window elapses,
   /// when a different message interrupts the run, when the entry is
   /// evicted past [repeatMemory], or on [Logger.flushRepeats].
   ///
@@ -261,12 +265,14 @@ class LoggerConfig {
   /// a `↺ xN` summary line. Default: `48`.
   static int repeatSummaryExcerpt = 48;
 
-  /// Reserved for backwards compatibility. The clickable location segment
-  /// is intentionally un-styled so the IDE's stack-frame scanner can match
-  /// it; this value is no longer applied.
+  /// Reserved for backwards compatibility; no longer applied.
+  ///
+  /// Use [locationStyle] instead. This field was withdrawn because it
+  /// styled the segment's interior, which does break the IDE scanners;
+  /// [locationStyle] wraps the segment from outside, which does not.
   @Deprecated(
-    'linkAnsiStyle is no longer applied. The trailing (<uri>:<line>:<col>) '
-    'segment must be un-styled for IDE click recognition.',
+    'Superseded by LoggerConfig.locationStyle, which applies its escapes '
+    'strictly outside the parentheses so the segment stays clickable.',
   )
   static String linkAnsiStyle = '';
 
