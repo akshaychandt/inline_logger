@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import '../console_style.dart';
 import '../link_format.dart';
 import '../log_record.dart';
 import '../logger_config.dart';
@@ -7,64 +8,209 @@ import '../source_location.dart';
 
 /// Formats [LogRecord] instances into console-printable strings.
 ///
-/// Output shape:
+/// Default output shape (0.3.0):
 /// ```
-/// [timestamp] emoji [LEVEL] @key message (<uri>:<line>:<col>)
+/// ERR syncPending failed: … (package:my_app/repo.dart:176:23)
 /// ```
-/// The trailing parenthesised location is the only format VS Code
-/// (Dart-Code) and IntelliJ/Android Studio recognise as a clickable link.
-/// It is always emitted at end-of-line with no styling, so the IDE's
-/// stack-frame scanner can match it.
+/// with the subsystem tag supplied by the console host's own dimmed
+/// gutter — see [KeyPlacement.developerLogName].
+///
+/// ## What the IDE link scanners actually require
+///
+/// The trailing parenthesised location is emitted with no ANSI styling,
+/// as the last thing on its physical line, because that is what the two
+/// scanners need:
+///
+/// * **VS Code (Dart-Code)** requires both `:line:column`; a bare
+///   `file.dart:42` is not linkified. It matches the *first* `.dart`
+///   occurrence on a line, so anything earlier in the line that looks
+///   like a Dart path wins instead — use [LocationPlacement.ownLine] to
+///   make the match unambiguous.
+/// * **IntelliJ / Android Studio** treats the column as optional, but
+///   requires a non-alphanumeric character immediately before the
+///   `package:` / `file:` scheme — hence the opening parenthesis.
+///
+/// Both resolve `package:` URIs through the package config, so eliding
+/// directories inside one breaks resolution and kills the link. The
+/// location is therefore never abbreviated.
 class ConsoleFormatter {
   ConsoleFormatter._();
 
   /// ANSI escape code: reset all attributes.
   static const String _reset = '\x1B[0m';
 
+  /// Marker for a collapsed run of identical lines.
+  static const String _repeatGlyph = '↺';
+
   /// One-shot deprecation warning for [LinkFormat.projectRelative].
   static bool _projectRelativeWarned = false;
 
   /// Formats a [LogRecord] into a console string.
+  ///
+  /// Under [LocationPlacement.ownLine] the result contains a single
+  /// embedded newline; otherwise it is always one line.
   static String format(LogRecord record) {
     final config = _FormatterConfig.fromLoggerConfig();
-    final body = _renderBody(record, config);
-    final colored =
-        config.useColors ? '${record.level.color}$body$_reset' : body;
-    final location = _renderLocationSegment(record.source, config);
-    return location == null ? colored : '$colored $location';
+    return _assemble(record, config);
   }
 
-  /// Formats a [LogRecord] into a plain string (no ANSI codes),
-  /// suitable for log history storage.
+  /// Formats a [LogRecord] into a plain string — no ANSI codes, no
+  /// embedded newlines — suitable for log history and file sinks.
+  ///
+  /// The key is always rendered inline here regardless of
+  /// [LoggerConfig.keyPlacement], because a plain-text sink has no
+  /// console gutter to carry it.
   static String formatPlain(LogRecord record) {
-    final config = _FormatterConfig.fromLoggerConfig();
-    final body = _renderBody(record, config);
-    final location = _renderLocationSegment(record.source, config);
-    return location == null ? body : '$body $location';
+    final config = _FormatterConfig.fromLoggerConfig().asPlain();
+    return _assemble(record, config);
   }
 
-  /// Render the prefix + key + message portion (everything before the
-  /// trailing parenthesised location).
+  /// Renders the IDE-clickable `(<uri>:<line>:<column>)` segment for
+  /// [source], or `null` if the current configuration suppresses it.
+  ///
+  /// Exposed so that a custom [LoggerConfig.formatter] can append a
+  /// correctly-formed link without having to reimplement the URI and
+  /// column rules described on this class.
+  static String? renderLocation(SourceLocation source) =>
+      _renderLocationSegment(source, _FormatterConfig.fromLoggerConfig());
+
+  /// Renders the summary line for a collapsed run of identical logs.
+  ///
+  /// [count] is the number of occurrences suppressed *after* the first
+  /// one was printed. The message is excerpted to
+  /// [LoggerConfig.repeatSummaryExcerpt] characters and the location is
+  /// omitted, since it is identical to the line already printed.
+  static String formatRepeatSummary(LogRecord record, int count) {
+    final config = _FormatterConfig.fromLoggerConfig();
+    final summary = LogRecord(
+      time: record.time,
+      level: record.level,
+      message: _excerpt(record.message, LoggerConfig.repeatSummaryExcerpt),
+      key: record.key,
+      repeatCount: count < 2 ? 2 : count,
+    );
+    return _renderBody(summary, config);
+  }
+
+  // ────────────────────────────────────────────────────────────────
+
+  static String _assemble(LogRecord record, _FormatterConfig config) {
+    final body = _renderBody(record, config);
+    final location = _renderLocationSegment(record.source, config);
+    final color = config.useColors ? record.level.color : null;
+
+    // [ColorScope.level] is applied inside _renderLevel, so the body is
+    // already final in that case.
+    final wrapsBody = color != null && config.colorScope != ColorScope.level;
+
+    if (location == null) {
+      return wrapsBody ? '$color$body$_reset' : body;
+    }
+
+    final joiner = config.locationPlacement == LocationPlacement.ownLine
+        ? '\n${config.locationPrefix}'
+        : ' ';
+
+    // ColorScope.line runs one span over the whole thing, so the
+    // location needs no style of its own.
+    if (color != null && config.colorScope == ColorScope.line) {
+      return '$color$body$joiner$location$_reset';
+    }
+
+    final styled = _styleLocation(location, config);
+    if (!wrapsBody) return '$body$joiner$styled';
+
+    // The body's span closes before the location, which then carries its
+    // own dim style. Both spans sit strictly outside the parentheses, so
+    // the segment's text stays contiguous for the IDE link scanners.
+    return '$color$body$_reset$joiner$styled';
+  }
+
+  /// Apply [LoggerConfig.locationStyle] to an already-rendered segment.
+  static String _styleLocation(String location, _FormatterConfig config) {
+    if (!config.useColors) return location;
+    final style = config.locationStyle;
+    return style.isEmpty ? location : '$style$location$_reset';
+  }
+
+  /// Render everything up to (but excluding) the location segment.
   static String _renderBody(LogRecord record, _FormatterConfig config) {
     final parts = <String>[];
 
-    if (config.showTimestamp) {
-      parts.add('[${record.time.toIso8601String()}]');
-    }
+    final timestamp = _renderTimestamp(record.time, config);
+    if (timestamp != null) parts.add(timestamp);
+
+    final level = _renderLevel(record, config);
+    if (level != null) parts.add(level);
+
+    // Deliberately after the level token: emoji cell widths are
+    // inconsistent across levels, so placing them before it would shift
+    // the fixed-width gutter and defeat column alignment.
     if (config.showEmoji) {
       parts.add(record.level.emoji);
     }
-    parts.add('[${record.level.label}]');
 
     if (config.showMemberName && record.source?.member != null) {
       parts.add(record.source!.member!);
     }
-    if (record.key != null && record.key!.isNotEmpty) {
-      parts.add('@${record.key}');
+
+    final key = record.key;
+    if (key != null &&
+        key.isNotEmpty &&
+        config.keyPlacement == KeyPlacement.inline) {
+      parts.add('@$key');
     }
-    parts.add(record.message);
+
+    if (record.repeatCount > 1) {
+      // No parentheses: the location segment owns the only parentheses
+      // on the line, so an IDE scanner can never mistake this for one.
+      parts.add('$_repeatGlyph x${record.repeatCount}');
+    }
+
+    if (record.message.isNotEmpty) parts.add(record.message);
 
     return parts.join(' ');
+  }
+
+  static String? _renderTimestamp(DateTime time, _FormatterConfig config) {
+    if (!config.showTimestamp) return null;
+    switch (config.timestampStyle) {
+      case TimestampStyle.none:
+        return null;
+      case TimestampStyle.clock:
+        final h = time.hour.toString().padLeft(2, '0');
+        final m = time.minute.toString().padLeft(2, '0');
+        final s = time.second.toString().padLeft(2, '0');
+        final ms = time.millisecond.toString().padLeft(3, '0');
+        return '$h:$m:$s.$ms';
+      case TimestampStyle.iso:
+        return '[${time.toIso8601String()}]';
+    }
+  }
+
+  static String? _renderLevel(LogRecord record, _FormatterConfig config) {
+    final String token;
+    switch (config.levelStyle) {
+      case LevelStyle.none:
+        return null;
+      case LevelStyle.short:
+        token = record.level.shortLabel;
+      case LevelStyle.full:
+        token = '[${record.level.label}]';
+    }
+    final colorizeToken =
+        config.useColors && config.colorScope == ColorScope.level;
+    return colorizeToken ? '${record.level.color}$token$_reset' : token;
+  }
+
+  /// Take the first [limit] characters of [message] as a single line.
+  static String _excerpt(String message, int limit) {
+    if (limit <= 0) return '';
+    final flat = message.replaceAll(RegExp(r'\s+'), ' ').trim();
+    // Count by runes so a truncation can never split a surrogate pair.
+    final runes = flat.runes.toList(growable: false);
+    if (runes.length <= limit) return flat;
+    return '${String.fromCharCodes(runes.take(limit))}…';
   }
 
   /// Render the trailing `(<uri>:<line>:<col>)` segment, or null if it
@@ -79,6 +225,7 @@ class ConsoleFormatter {
     if (source == null) return null;
     if (!config.showSourceLocation) return null;
     if (!config.useClickableLinks) return null;
+    if (config.locationPlacement == LocationPlacement.none) return null;
     if (!config.showFilePath && !config.showLineNumber) return null;
 
     final uriStr = _renderUri(source, config.clickableLinkFormat);
@@ -160,6 +307,13 @@ class _FormatterConfig {
   final bool showMemberName;
   final bool useClickableLinks;
   final LinkFormat clickableLinkFormat;
+  final TimestampStyle timestampStyle;
+  final ColorScope colorScope;
+  final LevelStyle levelStyle;
+  final LocationPlacement locationPlacement;
+  final String locationStyle;
+  final String locationPrefix;
+  final KeyPlacement keyPlacement;
 
   const _FormatterConfig({
     required this.showTimestamp,
@@ -172,6 +326,13 @@ class _FormatterConfig {
     required this.showMemberName,
     required this.useClickableLinks,
     required this.clickableLinkFormat,
+    required this.timestampStyle,
+    required this.colorScope,
+    required this.levelStyle,
+    required this.locationPlacement,
+    required this.locationStyle,
+    required this.locationPrefix,
+    required this.keyPlacement,
   });
 
   factory _FormatterConfig.fromLoggerConfig() {
@@ -186,6 +347,38 @@ class _FormatterConfig {
       showMemberName: LoggerConfig.showMemberName,
       useClickableLinks: LoggerConfig.useClickableLinks,
       clickableLinkFormat: LoggerConfig.clickableLinkFormat,
+      timestampStyle: LoggerConfig.timestampStyle,
+      colorScope: LoggerConfig.colorScope,
+      levelStyle: LoggerConfig.levelStyle,
+      locationPlacement: LoggerConfig.locationPlacement,
+      locationStyle: LoggerConfig.locationStyle,
+      locationPrefix: LoggerConfig.locationPrefix,
+      keyPlacement: LoggerConfig.keyPlacement,
     );
   }
+
+  /// Variant used by [ConsoleFormatter.formatPlain]: never coloured,
+  /// never multi-line, and the key is always carried inline because a
+  /// plain-text sink has no console gutter to render it into.
+  _FormatterConfig asPlain() => _FormatterConfig(
+        showTimestamp: showTimestamp,
+        showEmoji: showEmoji,
+        useColors: false,
+        showSourceLocation: showSourceLocation,
+        showFilePath: showFilePath,
+        showLineNumber: showLineNumber,
+        showColumnNumber: showColumnNumber,
+        showMemberName: showMemberName,
+        useClickableLinks: useClickableLinks,
+        clickableLinkFormat: clickableLinkFormat,
+        timestampStyle: timestampStyle,
+        colorScope: colorScope,
+        levelStyle: levelStyle,
+        locationPlacement: locationPlacement == LocationPlacement.none
+            ? LocationPlacement.none
+            : LocationPlacement.inline,
+        locationStyle: locationStyle,
+        locationPrefix: locationPrefix,
+        keyPlacement: KeyPlacement.inline,
+      );
 }

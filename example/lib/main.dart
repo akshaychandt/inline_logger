@@ -163,28 +163,38 @@ class _ExampleHomePageState extends State<ExampleHomePage> {
   void _demonstrateSourceLocations() {
     Logger.header('SOURCE LOCATION DEMO');
 
-    // Each of these will show a clickable link to THIS file:
-    Logger.info('Direct call from _demonstrateSourceLocations');
+    // Each of these shows a clickable link to THIS file.
+    // The shipped default: the key becomes the console's own gutter.
+    Logger.info('Direct call from _demonstrateSourceLocations', 'Demo');
     'inline value'.logDebug('Inline call');
 
-    // Show different link formats
-    LoggerConfig.clickableLinkFormat = LinkFormat.fileUri;
-    Logger.info('fileUri format');
-
+    // Note: every LinkFormat except bareAbsolute renders identically for
+    // files under lib/, because those frames are already package: URIs.
     LoggerConfig.clickableLinkFormat = LinkFormat.bareAbsolute;
-    Logger.info('bareAbsolute format');
-
-    LoggerConfig.clickableLinkFormat = LinkFormat.packageUri;
-    Logger.info('packageUri format');
-
-    // Location segment is omitted entirely when this is false.
-    LoggerConfig.useClickableLinks = false;
-    Logger.info('no location segment');
-
-    // Reset to defaults
+    Logger.info('bareAbsolute — the only format that differs here', 'Demo');
     LoggerConfig.clickableLinkFormat = LinkFormat.auto;
-    LoggerConfig.useClickableLinks = true;
 
+    // The location on its own row: no `.dart` in a message can steal
+    // the click, and the row can never blow past Dart-Code's parse cap.
+    LoggerConfig.locationPlacement = LocationPlacement.ownLine;
+    Logger.info('location on its own line', 'Demo');
+    LoggerConfig.locationPlacement = LocationPlacement.inline;
+
+    // The 0.2.x layout, for comparison.
+    LoggerConfig.keyPlacement = KeyPlacement.inline;
+    LoggerConfig.developerLogName = 'InlineLogger';
+    LoggerConfig.showTimestamp = true;
+    LoggerConfig.timestampStyle = TimestampStyle.iso;
+    LoggerConfig.levelStyle = LevelStyle.full;
+    LoggerConfig.showEmoji = true;
+    Logger.info('the 0.2.x layout', 'Demo');
+
+    // Location segment omitted entirely.
+    LoggerConfig.useClickableLinks = false;
+    Logger.info('no location segment', 'Demo');
+
+    LoggerConfig.reset();
+    LoggerConfig.enabled = true;
     Logger.divider();
 
     if (mounted) {
@@ -205,11 +215,10 @@ class _ExampleHomePageState extends State<ExampleHomePage> {
     final history = LoggerConfig.logHistory;
     Logger.info('Total logs in history: ${history.length}');
 
-    for (var record in history) {
-      Logger.verbose(
-        '${record.level.label}: ${record.message}'
-        '${record.source != null ? ' (${record.source})' : ''}',
-      );
+    // Rendered through ConsoleFormatter.formatPlain: one ANSI-free,
+    // single-line entry per record, ready for a file sink.
+    for (final line in LoggerConfig.logHistoryStrings) {
+      Logger.verbose(line);
     }
 
     Logger.divider();

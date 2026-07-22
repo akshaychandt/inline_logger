@@ -1,7 +1,15 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:inline_logger/inline_logger.dart';
+// Internal — not exported from the barrel. Imported directly so the
+// collapser's suppression decisions can be asserted without adding a
+// public test seam.
+import 'package:inline_logger/src/repeat_tracker.dart';
 
 void main() {
+  // LoggerConfig is entirely static, so without this a flag set by one
+  // test leaks into every test that follows it.
+  tearDown(LoggerConfig.reset);
+
   group('SourceLocation', () {
     test('creates with required fields', () {
       final loc = SourceLocation(filePath: '/app/lib/main.dart', line: 42);
@@ -221,6 +229,7 @@ void main() {
 
   group('LoggerConfig', () {
     setUp(() {
+      LoggerConfig.reset();
       // Reset to defaults before each test
       LoggerConfig.enabled = true;
       LoggerConfig.showSourceLocation = true;
@@ -242,15 +251,70 @@ void main() {
     });
 
     test('default source location flags', () {
+      LoggerConfig.reset();
       expect(LoggerConfig.showFilePath, isTrue);
       expect(LoggerConfig.showLineNumber, isTrue);
-      expect(LoggerConfig.showColumnNumber, isFalse);
+      expect(LoggerConfig.showColumnNumber, isTrue);
       expect(LoggerConfig.showMemberName, isFalse);
       expect(LoggerConfig.useClickableLinks, isTrue);
       expect(
         LoggerConfig.clickableLinkFormat,
         LinkFormat.auto,
       );
+    });
+
+    test('default console layout flags', () {
+      LoggerConfig.reset();
+      expect(LoggerConfig.showEmoji, isFalse);
+      expect(LoggerConfig.showTimestamp, isFalse);
+      expect(LoggerConfig.timestampStyle, TimestampStyle.clock);
+      expect(LoggerConfig.levelStyle, LevelStyle.short);
+      expect(LoggerConfig.locationPlacement, LocationPlacement.inline);
+      expect(LoggerConfig.keyPlacement, KeyPlacement.developerLogName);
+      expect(LoggerConfig.developerLogName, 'IL');
+      expect(LoggerConfig.dividerWidth, 60);
+      expect(LoggerConfig.consoleStackTraceFrames, 8);
+    });
+
+    test('repeat collapsing is opt-in', () {
+      LoggerConfig.reset();
+      expect(LoggerConfig.collapseRepeats, isFalse);
+      expect(LoggerConfig.repeatWindow, const Duration(minutes: 10));
+      expect(LoggerConfig.repeatMemory, 8);
+    });
+
+    test('reset() restores every mutated field', () {
+      LoggerConfig.showEmoji = true;
+      LoggerConfig.levelStyle = LevelStyle.full;
+      LoggerConfig.developerLogName = 'Custom';
+      LoggerConfig.collapseRepeats = true;
+      LoggerConfig.minLevel = LogLevel.critical;
+      LoggerConfig.formatter = (r) => 'x';
+      Logger.warning('leaves a history entry');
+
+      LoggerConfig.reset();
+
+      expect(LoggerConfig.showEmoji, isFalse);
+      expect(LoggerConfig.levelStyle, LevelStyle.short);
+      expect(LoggerConfig.developerLogName, 'IL');
+      expect(LoggerConfig.collapseRepeats, isFalse);
+      expect(LoggerConfig.minLevel, LogLevel.debug);
+      expect(LoggerConfig.formatter, isNull);
+      expect(LoggerConfig.logHistory, isEmpty);
+    });
+
+    test('logHistoryStrings renders through formatPlain', () {
+      LoggerConfig.showTimestamp = false;
+      Logger.warning('Disk full', 'Storage');
+
+      final lines = LoggerConfig.logHistoryStrings;
+      expect(lines, hasLength(1));
+      // Plain text: the key is always inline, no ANSI, no newlines.
+      expect(lines.single, contains('@Storage'));
+      expect(lines.single, contains('Disk full'));
+      expect(lines.single, isNot(contains('\x1B[')));
+      expect(lines.single, isNot(contains('\n')));
+      expect(lines.single, isNot(contains('LogRecord(')));
     });
 
     test('onRecord hook receives log records', () {
@@ -362,6 +426,7 @@ void main() {
 
   group('ConsoleFormatter', () {
     setUp(() {
+      LoggerConfig.reset();
       LoggerConfig.enabled = true;
       LoggerConfig.showSourceLocation = true;
       LoggerConfig.showFilePath = true;
@@ -373,6 +438,12 @@ void main() {
       LoggerConfig.useColors = false;
       LoggerConfig.showTimestamp = false;
       LoggerConfig.showEmoji = false;
+      // Pinned explicitly so these tests cannot silently change meaning
+      // if a shipped default is ever flipped again.
+      LoggerConfig.keyPlacement = KeyPlacement.inline;
+      LoggerConfig.levelStyle = LevelStyle.full;
+      LoggerConfig.locationPlacement = LocationPlacement.inline;
+      LoggerConfig.collapseRepeats = false;
     });
 
     test('formats with source location (fileUri)', () {
@@ -492,8 +563,13 @@ void main() {
 
       final output = ConsoleFormatter.format(record);
       expect(output, isNot(contains('main.dart')));
-      expect(output, isNot(contains('(')));
-      expect(output, isNot(contains(')')));
+      // No parenthesised source-location segment anywhere. Narrower than
+      // banning every paren, which would break the moment a message or a
+      // repeat summary legitimately contains one.
+      expect(
+        output,
+        isNot(matches(RegExp(r'\([^)]*\.dart[^)]*\)'))),
+      );
       expect(output, contains('Hello'));
     });
 
@@ -598,7 +674,7 @@ void main() {
       expect(output, endsWith(':7:1)'));
     });
 
-    test('location segment has no ANSI codes even with colors enabled', () {
+    test('location segment text is contiguous even with colors enabled', () {
       LoggerConfig.useColors = true;
       final record = LogRecord(
         time: DateTime(2024, 1, 1),
@@ -610,14 +686,21 @@ void main() {
         ),
       );
       final output = ConsoleFormatter.format(record);
-      // The trailing parenthesised segment must not be inside the
-      // colored body — it must come after the reset escape.
-      final reset = '\x1B[0m';
-      final resetIdx = output.indexOf(reset);
-      expect(resetIdx, greaterThan(0));
-      final tail = output.substring(resetIdx + reset.length);
-      expect(tail, isNot(contains('\x1B[')));
-      expect(tail, contains('(file:///abs/lib/main.dart:1:1)'));
+
+      // What the IDE link scanners need is that the segment's TEXT is
+      // one unbroken run — no escape sequence between the parentheses.
+      // Styling around the outside is fine; the console strips it before
+      // scanning. This is the assertion that must never regress.
+      expect(
+        output,
+        contains(
+          '${LoggerConfig.locationStyle}'
+          '(file:///abs/lib/main.dart:1:1)'
+          '\x1B[0m',
+        ),
+      );
+      // Nothing follows the closing parenthesis but the reset.
+      expect(output, endsWith('(file:///abs/lib/main.dart:1:1)\x1B[0m'));
     });
 
     test('parenthesised segment is at end-of-line', () {
@@ -639,6 +722,7 @@ void main() {
 
   group('Logger integration', () {
     setUp(() {
+      LoggerConfig.reset();
       LoggerConfig.enabled = true;
       LoggerConfig.showSourceLocation = true;
       LoggerConfig.showFilePath = true;
@@ -754,6 +838,8 @@ void main() {
   });
 
   group('Windows path handling', () {
+    setUp(LoggerConfig.reset);
+
     test('ConsoleFormatter handles Windows paths in fileUri', () {
       LoggerConfig.clickableLinkFormat = LinkFormat.fileUri;
       LoggerConfig.useColors = false;
@@ -775,6 +861,527 @@ void main() {
         output,
         contains('file:///C:/src/app/lib/main.dart:42'),
       );
+    });
+  });
+
+  group('Console layout (0.3.0)', () {
+    late LogRecord record;
+
+    setUp(() {
+      LoggerConfig.reset();
+      LoggerConfig.enabled = true;
+      LoggerConfig.useColors = false;
+      record = LogRecord(
+        time: DateTime(2026, 7, 21, 14, 23, 28, 751),
+        level: LogLevel.info,
+        message: 'Hello world',
+        key: 'TestKey',
+        source: SourceLocation(
+          filePath: 'package:my_app/main.dart',
+          line: 42,
+          column: 23,
+        ),
+      );
+    });
+
+    test('every shortLabel is exactly 3 columns wide', () {
+      for (final level in LogLevel.values) {
+        expect(level.shortLabel.length, 3, reason: level.name);
+      }
+      // The long labels are untouched, so custom formatters and the
+      // LevelStyle.full path keep working.
+      expect(LogLevel.info.label, 'INFO');
+    });
+
+    test('shipped default: no timestamp, short level, key in the gutter', () {
+      final output = ConsoleFormatter.format(record);
+      expect(output, 'INF Hello world (package:my_app/main.dart:42:23)');
+      // The key is carried by dev.log(name:), not by the line itself.
+      expect(output, isNot(contains('@TestKey')));
+      // Real captured column, not a hardcoded :1.
+      expect(output, endsWith(':42:23)'));
+    });
+
+    test('timestampStyle.clock renders HH:mm:ss.SSS', () {
+      LoggerConfig.showTimestamp = true;
+      final output = ConsoleFormatter.format(record);
+      expect(output, startsWith('14:23:28.751 '));
+      expect(output, matches(RegExp(r'^\d{2}:\d{2}:\d{2}\.\d{3} ')));
+    });
+
+    test('timestampStyle.iso restores the 0.2.x string', () {
+      LoggerConfig.showTimestamp = true;
+      LoggerConfig.timestampStyle = TimestampStyle.iso;
+      final output = ConsoleFormatter.format(record);
+      expect(output, startsWith('[${record.time.toIso8601String()}] '));
+    });
+
+    test('timestampStyle.none wins over showTimestamp', () {
+      LoggerConfig.showTimestamp = true;
+      LoggerConfig.timestampStyle = TimestampStyle.none;
+      expect(ConsoleFormatter.format(record), startsWith('INF '));
+    });
+
+    test('levelStyle.full restores [INFO]; none omits the token', () {
+      LoggerConfig.levelStyle = LevelStyle.full;
+      expect(ConsoleFormatter.format(record), startsWith('[INFO] '));
+
+      LoggerConfig.levelStyle = LevelStyle.none;
+      expect(ConsoleFormatter.format(record), startsWith('Hello world '));
+    });
+
+    test('default scope colours the whole line but not the location', () {
+      LoggerConfig.useColors = true;
+      final output = ConsoleFormatter.format(record);
+
+      expect(
+        output,
+        '${LogLevel.info.color}INF Hello world\x1B[0m'
+        ' \x1B[90m(package:my_app/main.dart:42:23)\x1B[0m',
+      );
+    });
+
+    test('locationStyle dims the segment without breaking its text', () {
+      LoggerConfig.useColors = true;
+
+      // The segment's text is one unbroken run between the escapes.
+      expect(
+        ConsoleFormatter.format(record),
+        endsWith('\x1B[90m(package:my_app/main.dart:42:23)\x1B[0m'),
+      );
+
+      LoggerConfig.locationStyle = '';
+      expect(
+        ConsoleFormatter.format(record),
+        endsWith(' (package:my_app/main.dart:42:23)'),
+      );
+
+      LoggerConfig.locationStyle = AnsiColors.dim;
+      expect(
+        ConsoleFormatter.format(record),
+        endsWith('\x1B[2m(package:my_app/main.dart:42:23)\x1B[0m'),
+      );
+    });
+
+    test('locationStyle is ignored when colours are off', () {
+      LoggerConfig.useColors = false;
+      expect(
+        ConsoleFormatter.format(record),
+        'INF Hello world (package:my_app/main.dart:42:23)',
+      );
+    });
+
+    test('ColorScope.line does not double-style the location', () {
+      LoggerConfig.useColors = true;
+      LoggerConfig.colorScope = ColorScope.line;
+      final output = ConsoleFormatter.format(record);
+      // Exactly two escapes: one opening the span, one closing it.
+      expect('\x1B['.allMatches(output), hasLength(2));
+      expect(output, isNot(contains(AnsiColors.gray)));
+    });
+
+    test('ColorScope.level colours only the token', () {
+      LoggerConfig.useColors = true;
+      LoggerConfig.colorScope = ColorScope.level;
+      final output = ConsoleFormatter.format(record);
+      expect(output, startsWith('${LogLevel.info.color}INF\x1B[0m '));
+      final afterLevel = output.substring(output.lastIndexOf('\x1B[0m') + 4);
+      expect(afterLevel, isNot(contains('\x1B[')));
+    });
+
+    test('ColorScope.line includes the location in the span', () {
+      LoggerConfig.useColors = true;
+      LoggerConfig.colorScope = ColorScope.line;
+      final output = ConsoleFormatter.format(record);
+      expect(
+        output,
+        '${LogLevel.info.color}INF Hello world'
+        ' (package:my_app/main.dart:42:23)\x1B[0m',
+      );
+    });
+
+    test('every scope is a no-op when useColors is false', () {
+      for (final scope in ColorScope.values) {
+        LoggerConfig.colorScope = scope;
+        LoggerConfig.useColors = false;
+        expect(
+          ConsoleFormatter.format(record),
+          'INF Hello world (package:my_app/main.dart:42:23)',
+          reason: scope.name,
+        );
+      }
+    });
+
+    test('colour spans close correctly with no location segment', () {
+      LoggerConfig.useColors = true;
+      LoggerConfig.useClickableLinks = false;
+      const color = '\x1B[34m'; // info
+      const reset = '\x1B[0m';
+
+      LoggerConfig.colorScope = ColorScope.body;
+      expect(ConsoleFormatter.format(record), '${color}INF Hello world$reset');
+
+      LoggerConfig.colorScope = ColorScope.line;
+      expect(ConsoleFormatter.format(record), '${color}INF Hello world$reset');
+
+      // Scope `level` closes its span after the token, so the line ends
+      // with the message rather than a reset.
+      LoggerConfig.colorScope = ColorScope.level;
+      expect(ConsoleFormatter.format(record), '${color}INF$reset Hello world');
+    });
+
+    test('ownLine keeps the location out of the body span', () {
+      LoggerConfig.useColors = true;
+      LoggerConfig.locationPlacement = LocationPlacement.ownLine;
+      final output = ConsoleFormatter.format(record);
+
+      final lines = output.split('\n');
+      expect(lines.first, '${LogLevel.info.color}INF Hello world\x1B[0m');
+      expect(lines.last, '↳ \x1B[90m(package:my_app/main.dart:42:23)\x1B[0m');
+      // The prefix stays outside the styled span, and the segment's text
+      // is unbroken.
+      expect(lines.last, startsWith('↳ '));
+    });
+
+    test('emoji renders after the level so the gutter cannot shift', () {
+      LoggerConfig.showEmoji = true;
+      expect(
+        ConsoleFormatter.format(record),
+        startsWith('INF ${LogLevel.info.emoji} '),
+      );
+    });
+
+    test('keyPlacement.inline restores @key', () {
+      LoggerConfig.keyPlacement = KeyPlacement.inline;
+      expect(ConsoleFormatter.format(record), contains('@TestKey'));
+    });
+
+    test('formatPlain always carries the key and is single-line', () {
+      LoggerConfig.useColors = true;
+      LoggerConfig.locationPlacement = LocationPlacement.ownLine;
+
+      final plain = ConsoleFormatter.formatPlain(record);
+      // The key is inline even though keyPlacement sends it to the
+      // gutter: a plain-text sink has no gutter to render into.
+      expect(plain, contains('@TestKey'));
+      expect(plain, isNot(contains('\n')));
+      expect(plain, isNot(contains('\x1B[')));
+      expect(plain, endsWith('(package:my_app/main.dart:42:23)'));
+    });
+
+    test('locationPlacement.ownLine isolates the link on its own row', () {
+      LoggerConfig.locationPlacement = LocationPlacement.ownLine;
+      final output = ConsoleFormatter.format(record);
+
+      expect('\n'.allMatches(output), hasLength(1));
+      final lines = output.split('\n');
+      expect(lines.first, 'INF Hello world');
+      expect(lines.last, '↳ (package:my_app/main.dart:42:23)');
+      // The location is the only .dart token on its line, so nothing in
+      // the message can steal VS Code's first-match link.
+      expect('.dart'.allMatches(lines.last), hasLength(1));
+    });
+
+    test('locationPlacement.none suppresses the segment', () {
+      LoggerConfig.locationPlacement = LocationPlacement.none;
+      final output = ConsoleFormatter.format(record);
+      expect(output, 'INF Hello world');
+    });
+
+    test('locationPrefix carries no .dart and ends non-alphanumeric', () {
+      // Both rules are enforced by the IDE link scanners, not by us, so
+      // pin the shipped default against regression.
+      expect(LoggerConfig.locationPrefix, isNot(contains('.dart')));
+      expect(
+        RegExp(r'[A-Za-z0-9]$').hasMatch(LoggerConfig.locationPrefix),
+        isFalse,
+      );
+    });
+
+    test('renderLocation matches the segment format() appends', () {
+      final segment = ConsoleFormatter.renderLocation(record.source!);
+      expect(segment, '(package:my_app/main.dart:42:23)');
+      expect(ConsoleFormatter.format(record), endsWith(segment!));
+
+      LoggerConfig.useClickableLinks = false;
+      expect(ConsoleFormatter.renderLocation(record.source!), isNull);
+    });
+
+    test('showColumnNumber=false restores the 0.2.x :1 column', () {
+      LoggerConfig.showColumnNumber = false;
+      expect(ConsoleFormatter.format(record), endsWith(':42:1)'));
+    });
+
+    test('a repeat summary carries no location and no parentheses', () {
+      final summary = ConsoleFormatter.formatRepeatSummary(record, 3);
+      expect(summary, 'INF ↺ x3 Hello world');
+      expect(summary, isNot(contains('main.dart')));
+    });
+
+    test('a repeat summary excerpts long messages to one line', () {
+      LoggerConfig.repeatSummaryExcerpt = 20;
+      final long = LogRecord(
+        time: record.time,
+        level: LogLevel.error,
+        message: 'line one\nline two which runs on and on and on',
+      );
+
+      final summary = ConsoleFormatter.formatRepeatSummary(long, 5);
+      expect(summary, 'ERR ↺ x5 line one line two wh…');
+      expect(summary, isNot(contains('\n')));
+    });
+  });
+
+  group('Console gutter name', () {
+    setUp(LoggerConfig.reset);
+
+    test('the key becomes the gutter under the shipped default', () {
+      // The whole point of the tagged-gutter layout: the subsystem name
+      // REPLACES the constant prefix rather than following it.
+      expect(Logger.resolveLogName('VideoProgressRepo'), 'VideoProgressRepo');
+    });
+
+    test('a keyless record falls back to developerLogName', () {
+      expect(Logger.resolveLogName(null), 'IL');
+      expect(Logger.resolveLogName(''), 'IL');
+    });
+
+    test('keyPlacement.inline keeps the gutter constant', () {
+      LoggerConfig.keyPlacement = KeyPlacement.inline;
+      expect(Logger.resolveLogName('VideoProgressRepo'), 'IL');
+    });
+
+    test('a .dart in the key cannot steal the click target', () {
+      // The host prepends `[$name] ` BEFORE VS Code scans the line, and
+      // Dart-Code linkifies the first `.dart` match — so an unsanitised
+      // key would take the click from the real trailing location.
+      expect(Logger.resolveLogName('widget_test.dart'), 'widget_test');
+      expect(
+        Logger.resolveLogName('widget_test.dart'),
+        isNot(contains('.dart')),
+      );
+    });
+
+    test('newlines cannot split the gutter across rows', () {
+      expect(Logger.resolveLogName('Repo\nInjected'), 'Repo Injected');
+      expect(Logger.resolveLogName('  padded  '), 'padded');
+    });
+
+    test('a key that sanitizes to nothing falls back, never to empty', () {
+      // dart:developer substitutes the literal `log` for an empty name,
+      // which is worse than any fallback we can pick.
+      expect(Logger.resolveLogName('.dart'), 'IL');
+      expect(Logger.resolveLogName('   '), 'IL');
+
+      LoggerConfig.developerLogName = '.dart';
+      expect(Logger.resolveLogName('.dart'), 'IL');
+      expect(Logger.resolveLogName(null), 'IL');
+    });
+
+    test('a custom developerLogName is honoured', () {
+      LoggerConfig.developerLogName = 'InlineLogger';
+      expect(Logger.resolveLogName(null), 'InlineLogger');
+      LoggerConfig.keyPlacement = KeyPlacement.inline;
+      expect(Logger.resolveLogName('Repo'), 'InlineLogger');
+    });
+  });
+
+  group('Repeat collapsing', () {
+    late List<MapEntry<LogRecord, int>> summaries;
+
+    /// Records emitted by the tracker instead of a full console line.
+    void sink(LogRecord sample, int suppressed) =>
+        summaries.add(MapEntry(sample, suppressed));
+
+    LogRecord at(
+      DateTime time, {
+      String message = 'sync failed',
+      String key = 'Repo',
+      LogLevel level = LogLevel.error,
+      int line = 176,
+    }) =>
+        LogRecord(
+          time: time,
+          level: level,
+          message: message,
+          key: key,
+          source: SourceLocation(
+            filePath: 'package:my_app/repo.dart',
+            line: line,
+          ),
+        );
+
+    final t0 = DateTime(2026, 7, 21, 14, 23, 28);
+
+    setUp(() {
+      LoggerConfig.reset();
+      LoggerConfig.enabled = true;
+      LoggerConfig.collapseRepeats = true;
+      summaries = [];
+    });
+
+    test('disabled by default, and then a pure no-op', () {
+      LoggerConfig.reset();
+      expect(LoggerConfig.collapseRepeats, isFalse);
+      for (var i = 0; i < 5; i++) {
+        expect(RepeatTracker.observe(at(t0), sink), isFalse);
+      }
+      expect(summaries, isEmpty);
+    });
+
+    test('identical records after the first are suppressed', () {
+      expect(RepeatTracker.observe(at(t0), sink), isFalse);
+      expect(
+        RepeatTracker.observe(at(t0.add(const Duration(minutes: 1))), sink),
+        isTrue,
+      );
+      expect(
+        RepeatTracker.observe(at(t0.add(const Duration(minutes: 2))), sink),
+        isTrue,
+      );
+      expect(RepeatTracker.pendingFor(at(t0)), 2);
+      expect(summaries, isEmpty, reason: 'nothing due yet');
+    });
+
+    test('records differing in any identity field are distinct', () {
+      expect(RepeatTracker.observe(at(t0), sink), isFalse);
+      expect(RepeatTracker.observe(at(t0, message: 'other'), sink), isFalse);
+      expect(RepeatTracker.observe(at(t0, key: 'Other'), sink), isFalse);
+      expect(RepeatTracker.observe(at(t0, line: 177), sink), isFalse);
+      expect(
+        RepeatTracker.observe(at(t0, level: LogLevel.warning), sink),
+        isFalse,
+      );
+    });
+
+    test('components cannot be forged into a colliding identity', () {
+      // A separator-joined identity is forgeable: joined by a space,
+      // (key 'A B', message 'C') and (key 'A', message 'B C') produce
+      // the same string, so two unrelated logs would share one counter
+      // and one of them would be silently swallowed.
+      expect(
+        RepeatTracker.observe(at(t0, key: 'A B', message: 'C'), sink),
+        isFalse,
+      );
+      expect(
+        RepeatTracker.observe(at(t0, key: 'A', message: 'B C'), sink),
+        isFalse,
+        reason: 'must be a distinct identity, not a suppressed repeat',
+      );
+
+      // Same trap one component over.
+      expect(
+        RepeatTracker.observe(at(t0, key: '', message: 'x y'), sink),
+        isFalse,
+      );
+      expect(
+        RepeatTracker.observe(at(t0, key: 'x', message: 'y'), sink),
+        isFalse,
+      );
+    });
+
+    test('a different message flushes the pending count first', () {
+      RepeatTracker.observe(at(t0), sink);
+      RepeatTracker.observe(at(t0), sink);
+      RepeatTracker.observe(at(t0), sink);
+      expect(summaries, isEmpty);
+
+      final printed = RepeatTracker.observe(at(t0, message: 'other'), sink);
+
+      expect(printed, isFalse);
+      expect(summaries, hasLength(1));
+      expect(summaries.single.value, 2);
+      expect(summaries.single.key.message, 'sync failed');
+      expect(RepeatTracker.pendingFor(at(t0)), 0, reason: 'counter zeroed');
+    });
+
+    test('two alternating messages each keep collapsing', () {
+      // The interleaved case: a flush must not evict the identities, or
+      // neither message would ever collapse.
+      RepeatTracker.observe(at(t0, message: 'A'), sink);
+      RepeatTracker.observe(at(t0, message: 'B'), sink);
+
+      for (var i = 1; i <= 3; i++) {
+        final t = t0.add(Duration(minutes: i));
+        expect(RepeatTracker.observe(at(t, message: 'A'), sink), isTrue);
+        expect(RepeatTracker.observe(at(t, message: 'B'), sink), isTrue);
+      }
+
+      expect(RepeatTracker.pendingFor(at(t0, message: 'A')), 3);
+      expect(RepeatTracker.pendingFor(at(t0, message: 'B')), 3);
+    });
+
+    test('the window is measured from the first occurrence', () {
+      // A 5-minute retry loop must not hold a 10-minute window open
+      // forever by refreshing it on every hit.
+      expect(RepeatTracker.observe(at(t0), sink), isFalse);
+      expect(
+        RepeatTracker.observe(at(t0.add(const Duration(minutes: 5))), sink),
+        isTrue,
+      );
+
+      final reprinted =
+          RepeatTracker.observe(at(t0.add(const Duration(minutes: 10))), sink);
+
+      expect(reprinted, isFalse, reason: 'window elapsed, print in full');
+      expect(summaries, hasLength(1));
+      expect(summaries.single.value, 1);
+    });
+
+    test('eviction past repeatMemory emits rather than drops', () {
+      LoggerConfig.repeatMemory = 2;
+
+      RepeatTracker.observe(at(t0, message: 'A'), sink);
+      RepeatTracker.observe(at(t0, message: 'A'), sink); // pending 1
+      RepeatTracker.observe(at(t0, message: 'B'), sink); // flushes A
+      expect(summaries.map((e) => e.value), [1]);
+      summaries.clear();
+
+      RepeatTracker.observe(at(t0, message: 'B'), sink); // pending 1
+      RepeatTracker.observe(at(t0, message: 'C'), sink); // flush + evict A
+
+      expect(summaries.map((e) => e.value), [1]);
+      expect(summaries.single.key.message, 'B');
+    });
+
+    test('flushRepeats surfaces everything still pending', () {
+      RepeatTracker.observe(at(t0), sink);
+      RepeatTracker.observe(at(t0), sink);
+      RepeatTracker.observe(at(t0), sink);
+
+      RepeatTracker.flushAll(sink);
+
+      expect(summaries, hasLength(1));
+      expect(summaries.single.value, 2);
+      expect(RepeatTracker.pendingFor(at(t0)), 0);
+    });
+
+    test('hooks and history observe 100% of records', () {
+      final seen = <LogRecord>[];
+      LoggerConfig.onRecord = seen.add;
+
+      for (var i = 0; i < 4; i++) {
+        Logger.error('identical failure', 'Repo');
+      }
+
+      // Console output may collapse; onRecord and logHistory never do.
+      expect(seen, hasLength(4));
+      expect(LoggerConfig.logHistory, hasLength(4));
+      expect(seen.every((r) => r.repeatCount == 1), isTrue);
+    });
+
+    test('a custom formatter disables collapsing entirely', () {
+      final formatted = <String>[];
+      LoggerConfig.formatter = (r) {
+        formatted.add(r.message);
+        return r.message;
+      };
+
+      for (var i = 0; i < 4; i++) {
+        Logger.error('identical failure', 'Repo');
+      }
+
+      expect(formatted, hasLength(4));
     });
   });
 }

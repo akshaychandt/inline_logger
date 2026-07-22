@@ -37,6 +37,7 @@
 /// ```
 library;
 
+export 'src/console_style.dart';
 export 'src/extensions.dart';
 export 'src/formatters/console_formatter.dart';
 export 'src/link_format.dart';

@@ -26,8 +26,11 @@ return Text(user.name.log('User name'));
 - 🔗 **Chainable inline logging** - Log any value without breaking code flow
 - 🎯 **Multiple log levels** - Debug, Verbose, Info, Success, Warning, Error, Critical
 - 📍 **Clickable source locations** - IDE-clickable links to the exact call site
+- 🧹 **Low-noise by default** - ~24 columns of chrome, not ~74, so your message stops wrapping
+- 🏷️ **Tag in the IDE's own gutter** - your subsystem name *replaces* the log prefix instead of following it
 - 🎨 **Color-coded output** - Different colors for each log level in console
-- 🎨 **Emoji indicators** - Visual log levels (can be disabled)
+- 🎨 **Emoji indicators** - Visual log levels (opt-in)
+- ↺ **Repeat collapsing** - fold a retry loop's identical lines into `↺ xN` (opt-in, lossless)
 - ⚡ **Zero performance impact** - Automatically disabled in release mode
 - 📊 **Log history** - Store important logs for crash reporting
 - 🔍 **Stack trace support** - Capture stack traces for errors
@@ -41,7 +44,7 @@ Add this to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  inline_logger: ^0.2.0
+  inline_logger: ^0.3.0
 ```
 
 Then run:
@@ -127,32 +130,160 @@ inline_logger supports 7 log levels with color-coded output:
 // Set minimum log level (only warnings and above)
 LoggerConfig.minLevel = LogLevel.warning;
 
-// Disable timestamps
-LoggerConfig.showTimestamp = false;
+// Timestamps — off by default, because DevTools and both IDE consoles
+// render their own time column. Turn them on for a plain terminal.
+LoggerConfig.showTimestamp = true;
+LoggerConfig.timestampStyle = TimestampStyle.clock;  // 14:23:28.751
+LoggerConfig.timestampStyle = TimestampStyle.iso;    // the 0.2.x form
 
-// Disable emojis
-LoggerConfig.showEmoji = false;
+// Level token — a fixed-width 3-char abbreviation by default, so the
+// message always starts at the same column.
+LoggerConfig.levelStyle = LevelStyle.short;  // ERR
+LoggerConfig.levelStyle = LevelStyle.full;   // [ERROR]
+LoggerConfig.levelStyle = LevelStyle.none;
 
-// Enable/disable color-coded output
+// Emojis — off by default. Severity is already carried by the colour
+// and the level token, and emoji cell widths differ between levels,
+// which is what stops columns from lining up.
+LoggerConfig.showEmoji = true;
+
+// Enable/disable color-coded output.
 LoggerConfig.useColors = true; // Default is true
+
+// How much of the line the level's colour covers.
+LoggerConfig.colorScope = ColorScope.body;   // default: whole line
+                                             // except the location
+LoggerConfig.colorScope = ColorScope.line;   // include the location
+LoggerConfig.colorScope = ColorScope.level;  // only the ERR/WRN token
+
+// The trailing location is dimmed so it recedes. Without this it renders
+// in the console's default foreground — a bright amber in the VS Code
+// Debug Console, which makes the least important part of the line the
+// loudest. Set to '' to leave it un-styled.
+LoggerConfig.locationStyle = AnsiColors.gray;  // default
 
 // Disable logging completely
 LoggerConfig.enabled = false;
+
+// Reset every field to its shipped default (also clears history).
+LoggerConfig.reset();
+```
+
+### Where the tag comes from
+
+`dart:developer` renders a `[name] ` gutter on every log line, and the prefix cannot be removed — an empty name is substituted with the literal `log` by the SDK debug adapter, Dart-Code, flutter-intellij and DevTools alike. So inline_logger puts it to work: by default your log's **key becomes the gutter**, replacing the constant prefix rather than following it.
+
+```dart
+Logger.error('syncPending failed', 'VideoProgressRepo');
+// [VideoProgressRepo] ERR syncPending failed (package:my_app/repo.dart:176:7)
+//  ^^^^^^^^^^^^^^^^^ drawn by the console host — costs zero columns of
+//                    the line's own width, and gives DevTools per-
+//                    subsystem filtering via `k:VideoProgressRepo`
+```
+
+Records with no key fall back to `LoggerConfig.developerLogName` (`'IL'`). To get the 0.2.x `@key` form back:
+
+```dart
+LoggerConfig.keyPlacement = KeyPlacement.inline;
+LoggerConfig.developerLogName = 'IL';
+// [IL] ERR @VideoProgressRepo syncPending failed (package:…:176:7)
+```
+
+### Collapsing repeated logs
+
+A retry loop or polling timer that logs the same failure every few minutes fills the console with identical lines. Opt in to collapse them:
+
+```dart
+LoggerConfig.collapseRepeats = true;
+LoggerConfig.repeatWindow = const Duration(minutes: 10);
+
+// [VideoProgressRepo] ERR syncPending failed (package:…/repo.dart:176:7)
+// [VideoProgressRepo] ERR ↺ x3 syncPending failed
+```
+
+Suppression is **console-only and lossless**:
+
+- `onRecord` and `logHistory` run *above* the collapser and always see 100% of records, so Crashlytics/Sentry forwarding is unaffected.
+- A pending count is never discarded — it is surfaced as a `↺ xN` summary when the window elapses, when a different message interrupts the run, when the entry is evicted past `repeatMemory`, or on an explicit `Logger.flushRepeats()`.
+- The window is measured from a run's **first** occurrence, so a message repeating every 5 minutes reports in every 10 rather than staying hidden forever.
+- It is skipped entirely whenever `LoggerConfig.formatter` is set.
+
+### Console recipes
+
+```dart
+// ── Android Studio / IntelliJ ────────────────────────────────────────
+// The IntelliJ Run console does not decode ANSI for dart:developer.log,
+// so colours arrive as literal escape codes. Trade them for emoji.
+LoggerConfig.useColors = false;
+LoggerConfig.showEmoji = true;
+
+// ── Plain `flutter run` terminal ─────────────────────────────────────
+// No timestamp column of its own, so add one.
+LoggerConfig.showTimestamp = true;
+
+// ── Bullet-proof click-to-source ─────────────────────────────────────
+LoggerConfig.locationPlacement = LocationPlacement.ownLine;
+
+// ── Noisy retry loops ────────────────────────────────────────────────
+LoggerConfig.collapseRepeats = true;
+
+// ── Quiet: keep logs, drop the paths ─────────────────────────────────
+LoggerConfig.useClickableLinks = false;
+
+// ── Restore the 0.2.x look ───────────────────────────────────────────
+LoggerConfig.developerLogName = 'InlineLogger';
+LoggerConfig.keyPlacement = KeyPlacement.inline;
+LoggerConfig.showTimestamp = true;
+LoggerConfig.timestampStyle = TimestampStyle.iso;
+LoggerConfig.levelStyle = LevelStyle.full;
+LoggerConfig.showEmoji = true;
+LoggerConfig.showColumnNumber = false;
+// Note: the emoji now renders *after* the level token rather than
+// before it, so that it cannot shift the fixed-width gutter.
 ```
 
 ### 📍 Clickable Source Locations
 
-Every log line automatically includes the **exact call site** (file path + line + column) appended at end-of-line in parentheses — the only format VS Code (Dart-Code) and Android Studio / IntelliJ recognise as clickable. Click the link in your IDE's Run/Debug console to jump directly to that line of source code.
+Every log line automatically includes the **exact call site** (file path + line + column) appended at end-of-line in parentheses. Click it in your IDE's Run/Debug console to jump straight to that line.
 
 ```
-[2024-01-01T12:34:56.789] ℹ️ [INFO] Counter updated → 5 (package:my_app/main.dart:42:5)
+[MyRepo] INF Counter updated → 5 (package:my_app/main.dart:42:23)
 ```
+
+The leading `[MyRepo] ` gutter is drawn by the console host, not by this package — see [Where the tag comes from](#where-the-tag-comes-from).
 
 **No extra arguments needed** — source location is captured automatically via `StackTrace.current`, and the package intelligently skips its own internal frames to find your code.
 
-The trailing `(...)` segment is intentionally un-styled (no ANSI), at end-of-line, with a mandatory `:line:column`. Anything else breaks the IDE's stack-frame scanner.
+#### What the IDE link scanners actually require
+
+The trailing `(...)` segment is un-styled (no ANSI) and is always the last thing on its physical line, because that is what the two scanners need:
+
+- **VS Code (Dart-Code)** requires both `:line:column` — a bare `main.dart:42` is not linkified. It matches the **first** `.dart` occurrence on a line, so a `.dart` substring earlier in your message wins instead. Set `LoggerConfig.locationPlacement = LocationPlacement.ownLine` to make the match unambiguous.
+- **IntelliJ / Android Studio** treats the column as optional, but requires a non-alphanumeric character immediately before the `package:` / `file:` scheme — which is what the opening parenthesis provides.
+
+Both resolve `package:` URIs through your package config, so eliding directories inside one breaks resolution and kills the link. The location is therefore never abbreviated.
+
+#### Where the location goes
+
+```dart
+// Default — appended to the message line.
+LoggerConfig.locationPlacement = LocationPlacement.inline;
+// INF Counter updated → 5 (package:my_app/main.dart:42:23)
+
+// On its own row. Costs a line, but makes the link bullet-proof: no
+// `.dart` in your message can steal it, and the row can never exceed
+// Dart-Code's 1000-character parse limit (which `Logger.json` does hit).
+LoggerConfig.locationPlacement = LocationPlacement.ownLine;
+// INF Counter updated → 5
+// ↳ (package:my_app/main.dart:42:23)
+
+// Omit it entirely (same as useClickableLinks = false).
+LoggerConfig.locationPlacement = LocationPlacement.none;
+```
 
 #### Link Formats
+
+For frames under `lib/` — which is nearly all of them — `auto`, `packageUri`, `fileUri` and `projectRelative` all emit the **same** `package:` string. Only `bareAbsolute` differs, and only for non-`package:` URIs such as files under `test/`.
 
 ```dart
 // Recommended default — package: URIs are clickable in both VS Code and
@@ -161,15 +292,16 @@ LoggerConfig.clickableLinkFormat = LinkFormat.auto;
 
 // Explicit package URI (same fallback behaviour as `auto`).
 LoggerConfig.clickableLinkFormat = LinkFormat.packageUri;
-// Output: (package:my_app/main.dart:42:5)
+// Output: (package:my_app/main.dart:42:23)
 
 // Absolute file URI — clickable in both VS Code and Android Studio.
 LoggerConfig.clickableLinkFormat = LinkFormat.fileUri;
-// Output: (file:///Users/akshay/app/lib/main.dart:42:5)
+// Output: (file:///Users/akshay/app/lib/main.dart:42:23)
 
 // Bare absolute path — kept for older IntelliJ plugin versions.
+// Not clickable in VS Code, which requires a URI scheme.
 LoggerConfig.clickableLinkFormat = LinkFormat.bareAbsolute;
-// Output: (/Users/akshay/app/lib/main.dart:42:5)
+// Output: (/Users/akshay/app/lib/main.dart:42:23)
 
 // Deprecated: project-relative paths are NOT clickable in any IDE.
 // Silently falls back to packageUri/fileUri.
@@ -182,13 +314,17 @@ LoggerConfig.clickableLinkFormat = LinkFormat.bareAbsolute;
 // Master switch (default: true in debug, false in release)
 LoggerConfig.showSourceLocation = true;
 
-// Show/hide individual components
+// These two have no *individual* effect — a clickable link needs both a
+// path and a line, so only the both-false case suppresses the segment.
+// To hide it, use useClickableLinks or LocationPlacement.none.
 LoggerConfig.showFilePath = true;
 LoggerConfig.showLineNumber = true;
-// The rendered string always includes `:column` (IDEs require it). This
-// flag controls only whether the column comes from the stack frame
-// (`true`) or is forced to `:1` (`false`).
-LoggerConfig.showColumnNumber = false;
+
+// The rendered string ALWAYS includes `:column` (VS Code requires it).
+// This flag controls only whether that column is the real one from the
+// stack frame (`true`, the default since 0.3.0) or a forced `:1`.
+LoggerConfig.showColumnNumber = true;
+
 LoggerConfig.showMemberName = false;    // Off by default
 
 // Omit the location segment from the rendered string entirely.
@@ -212,6 +348,16 @@ inline_logger automatically adds ANSI color codes to your console output, making
 - **Warning** logs appear in yellow
 - **Error** logs appear in red
 - **Critical** logs appear in bright red
+
+By default the colour covers the whole line up to the clickable location, which stays un-styled so IDE link scanners can match it:
+
+```
+\x1B[31mERR boom\x1B[0m (package:app/main.dart:9:4)
+```
+
+The location carries its own dim style (`LoggerConfig.locationStyle`, gray by default) so it recedes rather than competing with the message. Both spans sit strictly outside the parentheses, so the segment's text reaches the IDE link scanners as one unbroken run.
+
+`ColorScope.line` extends the level's span over the location too; `ColorScope.level` narrows it to just the `ERR` token. Note that an ANSI reset returns the foreground to the terminal default, which is *not* necessarily the colour a console uses for un-styled text — that is why an un-styled location shows up amber in the VS Code Debug Console, and why `ColorScope.level` renders the text before and after the token in two different colours.
 
 Colors work in most modern IDEs and terminals that support ANSI escape codes. You can disable colors if needed:
 
@@ -246,12 +392,17 @@ Replace the built-in console formatter:
 
 ```dart
 LoggerConfig.formatter = (record) {
+  // Use renderLocation so the segment stays IDE-clickable — it applies
+  // the mandatory `:line:column` and the URI rules for you. Building
+  // the string by hand is how you end up with a dead link.
   final source = record.source != null
-      ? ' (${record.source!.filePath}:${record.source!.line})'
+      ? ' ${ConsoleFormatter.renderLocation(record.source!)}'
       : '';
-  return '${record.level.label}$source: ${record.message}';
+  return '${record.level.label}: ${record.message}$source';
 };
 ```
+
+Note that setting a custom formatter also disables repeat collapsing, so your formatter always receives every record.
 
 ### API Logging
 
@@ -416,10 +567,11 @@ void main() {
 void main() {
   // Show everything in debug
   LoggerConfig.minLevel = LogLevel.debug;
-  LoggerConfig.showTimestamp = true;
-  LoggerConfig.showEmoji = true;
   LoggerConfig.useColors = true;
   LoggerConfig.maxHistorySize = 100;
+
+  // Add a timestamp if your console has no time column of its own.
+  LoggerConfig.showTimestamp = true;
 
   // Source locations are enabled by default in debug mode
   // Customize format for your IDE:
@@ -460,6 +612,7 @@ All these methods can be chained on any object:
 - `Logger.lifecycle(event, [details])` - Log lifecycle event
 - `Logger.divider([title])` - Log divider
 - `Logger.header(title)` - Log header
+- `Logger.flushRepeats()` - Emit any pending `↺ xN` repeat summaries immediately
 
 ### New Types
 
@@ -467,26 +620,39 @@ All these methods can be chained on any object:
 - `SourceLocationResolver` - Resolves call sites from stack traces
 - `LinkFormat` - Enum for IDE-clickable link formats
 - `LogRecord` - Structured log event record
-- `ConsoleFormatter` - Formats LogRecords for console output
+- `ConsoleFormatter` - Formats LogRecords for console output. `renderLocation` builds a clickable segment; `formatPlain` renders an ANSI-free single line.
+- `TimestampStyle` / `LevelStyle` / `LocationPlacement` / `KeyPlacement` - Console layout styles (0.3.0)
 
 ### Configuration
 
 - `LoggerConfig.enabled` - Master switch (default: `kDebugMode`)
 - `LoggerConfig.minLevel` - Minimum log level
-- `LoggerConfig.showTimestamp` - Show timestamps
-- `LoggerConfig.showEmoji` - Show emoji indicators
+- `LoggerConfig.showTimestamp` - Show timestamps (default: `false`)
+- `LoggerConfig.timestampStyle` - `clock` (default) or `iso`
+- `LoggerConfig.levelStyle` - `short` (default), `full`, or `none`
+- `LoggerConfig.showEmoji` - Show emoji indicators (default: `false`)
 - `LoggerConfig.useColors` - ANSI color output
+- `LoggerConfig.colorScope` - `body` (default), `line`, or `level`
+- `LoggerConfig.locationStyle` - ANSI style for the location segment (default: `AnsiColors.gray`; `''` to disable)
+- `LoggerConfig.keyPlacement` - `developerLogName` (default) or `inline`
+- `LoggerConfig.developerLogName` - The `[name] ` gutter, and the fallback for keyless records (default: `'IL'`)
+- `LoggerConfig.dividerWidth` - Width of `Logger.divider` rules (default: `60`)
+- `LoggerConfig.consoleStackTraceFrames` - Frames forwarded to the console (default: `8`; `null` for all)
 - `LoggerConfig.showSourceLocation` - Source location capture (default: `kDebugMode`)
-- `LoggerConfig.showFilePath` - Show file path
-- `LoggerConfig.showLineNumber` - Show line number
-- `LoggerConfig.showColumnNumber` - Show column number
+- `LoggerConfig.locationPlacement` - `inline` (default), `ownLine`, or `none`
+- `LoggerConfig.locationPrefix` - Prefix for the `ownLine` row (default: `'↳ '`)
+- `LoggerConfig.showFilePath` / `showLineNumber` - No individual effect; only the both-false case suppresses the location
+- `LoggerConfig.showColumnNumber` - Real captured column (default: `true`) vs a forced `:1`
 - `LoggerConfig.showMemberName` - Show enclosing member name
 - `LoggerConfig.useClickableLinks` - When `false`, omits the location segment entirely
 - `LoggerConfig.clickableLinkFormat` - Link format (default: `LinkFormat.auto`)
 - ~~`LoggerConfig.linkAnsiStyle`~~ - **Deprecated.** The clickable segment must be un-styled for IDE recognition; this value is no longer applied.
+- `LoggerConfig.collapseRepeats` - Collapse identical console lines (default: `false`)
+- `LoggerConfig.repeatWindow` / `repeatMemory` / `repeatSummaryExcerpt` - Collapser tuning
 - `LoggerConfig.onRecord` - Custom record sink
 - `LoggerConfig.formatter` - Custom formatter override
 - `LoggerConfig.maxHistorySize` - Max history entries
+- `LoggerConfig.reset()` - Restore every field to its shipped default
 
 ## 🤝 Contributing
 

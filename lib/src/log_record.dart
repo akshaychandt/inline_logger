@@ -30,6 +30,19 @@ class LogRecord {
   /// An optional stack trace associated with this log.
   final StackTrace? stackTrace;
 
+  /// How many occurrences this record stands for.
+  ///
+  /// `1` for the first occurrence of a given
+  /// `(level, key, message, source)` identity. Greater than `1` only on
+  /// the summary record synthesised by the opt-in repeat collapser
+  /// (see [LoggerConfig.collapseRepeats]), which reports how many
+  /// identical occurrences were folded into it.
+  ///
+  /// Records delivered to [LoggerConfig.onRecord] and
+  /// [LoggerConfig.logHistory] always have `repeatCount == 1`: the
+  /// collapser suppresses console output only, never the hooks.
+  final int repeatCount;
+
   /// Creates a [LogRecord] with the given parameters.
   const LogRecord({
     required this.time,
@@ -39,11 +52,13 @@ class LogRecord {
     this.source,
     this.error,
     this.stackTrace,
+    this.repeatCount = 1,
   });
 
   @override
   String toString() => 'LogRecord(time: $time, level: $level, message: $message'
       '${key != null ? ', key: $key' : ''}'
       '${source != null ? ', source: $source' : ''}'
-      '${error != null ? ', error: $error' : ''})';
+      '${error != null ? ', error: $error' : ''}'
+      '${repeatCount > 1 ? ', repeatCount: $repeatCount' : ''})';
 }

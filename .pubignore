@@ -1,0 +1,52 @@
+# Files kept in the repo but not shipped to pub.dev.
+#
+# IMPORTANT: a .pubignore REPLACES .gitignore for publishing, it does not
+# add to it. Everything .gitignore excludes must be repeated here, or it
+# ships. Notably `build/`, which holds ~130 MB of Flutter test cache.
+
+# ── Build output and tool caches (mirrors .gitignore) ────────────────
+build/
+.dart_tool/
+.pub/
+.pub-cache/
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies
+**/doc/api/
+pubspec.lock
+
+# ── Editor and OS cruft (mirrors .gitignore) ─────────────────────────
+.DS_Store
+.atom/
+.buildlog/
+.history
+.svn/
+.idea/
+.claude/
+*.iml
+*.ipr
+*.iws
+*.class
+*.log
+*.pyc
+*.swp
+migrate_working_dir/
+
+# ── Symbolication / obfuscation artifacts (mirrors .gitignore) ───────
+app.*.symbols
+app.*.map.json
+
+# ── Not useful to package consumers ──────────────────────────────────
+# Internal working notes, superseded by README.md and CHANGELOG.md.
+COLOR_FEATURE_SUMMARY.md
+
+# The example's platform scaffolding is large and adds nothing to the
+# published archive; example/lib and example/pubspec.yaml still ship.
+example/ios/
+example/android/
+example/macos/
+example/linux/
+example/windows/
+example/web/
+example/build/
+example/.dart_tool/
