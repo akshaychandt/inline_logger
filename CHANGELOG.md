@@ -1,3 +1,23 @@
+## 0.3.1
+
+### Added
+
+* **`LevelStyle.emoji`** — render the level's glyph *in place of* the
+  text token, so a line reads `❌ syncPending failed: …` instead of
+  `ERR syncPending failed: …`. Severity is read from the icon at a
+  glance.
+
+  ```dart
+  LoggerConfig.levelStyle = LevelStyle.emoji;
+  ```
+
+  Distinct from `LoggerConfig.showEmoji`, which *appends* a glyph after a
+  text token; under `LevelStyle.emoji` the glyph *is* the token, and
+  `showEmoji` is ignored so the icon is never printed twice. Unlike
+  `LevelStyle.short`, this token is not fixed-width — emoji cell widths
+  differ between levels — so keep `short` when a scannable table matters
+  more than the icons.
+
 ## 0.3.0
 
 A console-output release: same API, far less noise per line. The fixed

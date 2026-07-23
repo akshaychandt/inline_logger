@@ -175,7 +175,10 @@ class ConsoleFormatter {
     // Deliberately after the level token: emoji cell widths are
     // inconsistent across levels, so placing them before it would shift
     // the fixed-width gutter and defeat column alignment.
-    if (config.showEmoji) {
+    //
+    // Skipped under LevelStyle.emoji, where the level token already *is*
+    // the glyph — appending it again would print the emoji twice.
+    if (config.showEmoji && config.levelStyle != LevelStyle.emoji) {
       parts.add(record.level.emoji);
     }
 
@@ -231,6 +234,8 @@ class ConsoleFormatter {
         token = record.level.shortLabel;
       case LevelStyle.full:
         token = '[${record.level.label}]';
+      case LevelStyle.emoji:
+        token = record.level.emoji;
     }
     final colorizeToken =
         config.useColors && config.colorScope == ColorScope.level;

@@ -140,11 +140,14 @@ LoggerConfig.timestampStyle = TimestampStyle.iso;    // the 0.2.x form
 // message always starts at the same column.
 LoggerConfig.levelStyle = LevelStyle.short;  // ERR
 LoggerConfig.levelStyle = LevelStyle.full;   // [ERROR]
+LoggerConfig.levelStyle = LevelStyle.emoji;  // ❌  (glyph replaces the text)
 LoggerConfig.levelStyle = LevelStyle.none;
 
 // Emojis — off by default. Severity is already carried by the colour
 // and the level token, and emoji cell widths differ between levels,
-// which is what stops columns from lining up.
+// which is what stops columns from lining up. This flag *appends* the
+// glyph after the text token; to have the glyph *replace* the token,
+// use LevelStyle.emoji above instead.
 LoggerConfig.showEmoji = true;
 
 // Enable/disable color-coded output.
@@ -629,8 +632,8 @@ All these methods can be chained on any object:
 - `LoggerConfig.minLevel` - Minimum log level
 - `LoggerConfig.showTimestamp` - Show timestamps (default: `false`)
 - `LoggerConfig.timestampStyle` - `clock` (default) or `iso`
-- `LoggerConfig.levelStyle` - `short` (default), `full`, or `none`
-- `LoggerConfig.showEmoji` - Show emoji indicators (default: `false`)
+- `LoggerConfig.levelStyle` - `short` (default), `full`, `emoji`, or `none`
+- `LoggerConfig.showEmoji` - Append an emoji after the text token (default: `false`); ignored under `LevelStyle.emoji`
 - `LoggerConfig.useColors` - ANSI color output
 - `LoggerConfig.colorScope` - `body` (default), `line`, or `level`
 - `LoggerConfig.locationStyle` - ANSI style for the location segment (default: `AnsiColors.gray`; `''` to disable)

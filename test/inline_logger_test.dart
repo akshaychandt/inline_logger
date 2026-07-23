@@ -933,6 +933,24 @@ void main() {
       expect(ConsoleFormatter.format(record), startsWith('Hello world '));
     });
 
+    test('levelStyle.emoji renders the glyph in place of the token', () {
+      LoggerConfig.levelStyle = LevelStyle.emoji;
+      expect(
+        ConsoleFormatter.format(record),
+        startsWith('${LogLevel.info.emoji} Hello world '),
+      );
+    });
+
+    test('levelStyle.emoji does not print the glyph twice with showEmoji', () {
+      LoggerConfig.levelStyle = LevelStyle.emoji;
+      LoggerConfig.showEmoji = true;
+      final output = ConsoleFormatter.format(record);
+      expect(output, startsWith('${LogLevel.info.emoji} Hello world '));
+      // Exactly one occurrence of the glyph — the trailing showEmoji copy
+      // is suppressed when the token already is the emoji.
+      expect(LogLevel.info.emoji.allMatches(output).length, 1);
+    });
+
     test('default scope colours the whole line but not the location', () {
       LoggerConfig.useColors = true;
       final output = ConsoleFormatter.format(record);

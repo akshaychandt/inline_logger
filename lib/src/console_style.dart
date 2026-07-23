@@ -75,6 +75,22 @@ enum LevelStyle {
 
   /// `[DEBUG]` … `[CRITICAL]` — the 0.2.x format, byte for byte.
   full,
+
+  /// The level's [LogLevel.emoji] glyph *in place of* the text token:
+  /// `🔍 📝 ℹ️ ✅ ⚠️ ❌ 🚨`. Severity is read at a glance from the icon
+  /// rather than a three-letter code.
+  ///
+  /// This is distinct from [LoggerConfig.showEmoji], which appends the
+  /// glyph *after* a text token; under this style the glyph *is* the
+  /// token, so [LoggerConfig.showEmoji] is ignored to avoid printing it
+  /// twice.
+  ///
+  /// Trade-off: unlike [short], this token is not fixed-width. Emoji
+  /// cell widths differ between levels — `ℹ️`/`⚠️` are a base character
+  /// plus U+FE0F while `🔍📝✅❌🚨` are single wide code points — so the
+  /// message start column can jitter by a cell. Choose [short] when a
+  /// scannable table matters more than the icons.
+  emoji,
 }
 
 /// Where the IDE-clickable `(<uri>:<line>:<column>)` segment is placed.

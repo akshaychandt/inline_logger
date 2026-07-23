@@ -185,6 +185,13 @@ class _ExampleHomePageState extends State<ExampleHomePage> {
     Logger.info('location on its own line', 'Demo');
     LoggerConfig.locationPlacement = LocationPlacement.inline;
 
+    // Emoji level token — the glyph replaces DBG/VRB/INF/… entirely.
+    LoggerConfig.levelStyle = LevelStyle.emoji;
+    Logger.info('emoji level token', 'Demo');
+    Logger.warning('emoji level token', 'Demo');
+    Logger.error('emoji level token', 'Demo');
+    LoggerConfig.levelStyle = LevelStyle.short;
+
     // The 0.2.x layout, for comparison.
     LoggerConfig.keyPlacement = KeyPlacement.inline;
     LoggerConfig.developerLogName = 'InlineLogger';
